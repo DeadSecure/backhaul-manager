@@ -18,12 +18,12 @@
 
 ### One-liner (Recommended)
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/AhmadXp/backhaul-manager/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/install.sh)
 ```
 
 ### Manual Download
 ```bash
-wget -O backhaul-manager.sh https://raw.githubusercontent.com/AhmadXp/backhaul-manager/main/backhaul-manager.sh
+wget -O backhaul-manager.sh https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/backhaul-manager.sh
 chmod +x backhaul-manager.sh
 ./backhaul-manager.sh
 ```

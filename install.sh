@@ -6,7 +6,7 @@
 
 set -e
 
-REPO_URL="https://raw.githubusercontent.com/AhmadXp/backhaul-manager/main"
+REPO_URL="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main"
 INSTALL_PATH="/root/backhaul-manager.sh"
 
 # Colors

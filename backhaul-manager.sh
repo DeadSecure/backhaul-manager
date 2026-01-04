@@ -121,27 +121,55 @@ check_and_download_backhaul() {
         return 1
     fi
 
-    local download_url="https://github.com/Musixal/Backhaul/releases/download/${BACKHAUL_VERSION}/backhaul_linux_${arch}.tar.gz"
-    local tar_file="/tmp/backhaul_linux_${arch}.tar.gz"
-
-    echo -e "${CYAN}   Downloading from: ${download_url}${NC}"
+    local filename="backhaul_linux_${arch}.tar.gz"
+    local tar_file="/tmp/${filename}"
+    local github_url="https://github.com/Musixal/Backhaul/releases/download/${BACKHAUL_VERSION}/${filename}"
     
-    if wget -q --show-progress -O "$tar_file" "$download_url"; then
-        print_success "Download complete!"
+    # لیست میررها برای سرورهای ایران
+    local mirrors=(
+        "https://gh-proxy.com/${github_url}"
+        "https://ghproxy.net/${github_url}"
+        "https://mirror.ghproxy.com/${github_url}"
+        "${github_url}"
+    )
+    
+    local download_success=false
+    
+    for mirror in "${mirrors[@]}"; do
+        echo -e "${CYAN}   Trying: ${mirror}${NC}"
         
-        echo -e "${CYAN}   Extracting...${NC}"
-        cd /root
-        if tar -xzf "$tar_file"; then
-            chmod +x "$BACKHAUL_BIN"
-            rm -f "$tar_file"
-            print_success "Backhaul installed successfully at $BACKHAUL_BIN"
-            return 0
-        else
-            print_error "Failed to extract tar file"
-            return 1
+        if wget -q --show-progress --timeout=30 -O "$tar_file" "$mirror" 2>/dev/null; then
+            # بررسی اینکه فایل واقعا دانلود شده
+            if [[ -f "$tar_file" ]] && [[ $(stat -c%s "$tar_file" 2>/dev/null || stat -f%z "$tar_file" 2>/dev/null) -gt 1000 ]]; then
+                download_success=true
+                print_success "Download complete from mirror!"
+                break
+            fi
         fi
+        
+        print_warning "Mirror failed, trying next..."
+        rm -f "$tar_file" 2>/dev/null
+    done
+    
+    if [[ "$download_success" == false ]]; then
+        print_error "All download mirrors failed!"
+        echo ""
+        echo -e "${YELLOW}   Manual download instructions:${NC}"
+        echo -e "   1. Download from: ${github_url}"
+        echo -e "   2. Upload to server: scp ${filename} root@SERVER:/tmp/"
+        echo -e "   3. Extract: cd /root && tar -xzf /tmp/${filename}"
+        return 1
+    fi
+    
+    echo -e "${CYAN}   Extracting...${NC}"
+    cd /root
+    if tar -xzf "$tar_file"; then
+        chmod +x "$BACKHAUL_BIN"
+        rm -f "$tar_file"
+        print_success "Backhaul installed successfully at $BACKHAUL_BIN"
+        return 0
     else
-        print_error "Failed to download Backhaul"
+        print_error "Failed to extract tar file"
         return 1
     fi
 }
@@ -533,83 +561,121 @@ manage_tunnels() {
         fi
         
         echo ""
+        echo -e "   ${DIM}[0]${NC} ${WHITE}Back to Main Menu${NC}"
+        echo ""
         print_separator
         echo ""
-        echo -e "   ${GREEN}[S]${NC} Start    ${RED}[T]${NC} Stop    ${YELLOW}[R]${NC} Restart"
-        echo -e "   ${CYAN}[L]${NC} Logs     ${PURPLE}[D]${NC} Delete  ${WHITE}[B]${NC} Back"
-        echo ""
         
-        read -p "$(echo -e "${WHITE}   Select tunnel number or action: ${NC}")" choice
+        read -p "$(echo -e "${WHITE}   Select tunnel number: ${NC}")" tunnel_num
         
-        case ${choice,,} in
-            b|back)
-                return
-                ;;
-            s|start|t|stop|r|restart|l|logs|d|delete)
-                echo ""
-                read -p "$(echo -e "${WHITE}   Enter tunnel number: ${NC}")" tunnel_num
-                if [[ "$tunnel_num" =~ ^[0-9]+$ ]] && [[ $tunnel_num -ge 1 ]] && [[ $tunnel_num -le ${#tunnels[@]} ]]; then
-                    local selected_tunnel="${tunnels[$((tunnel_num-1))]}"
-                    
-                    case ${choice,,} in
-                        s|start)
-                            systemctl start "$selected_tunnel"
-                            print_success "Started $selected_tunnel"
-                            sleep 1
-                            ;;
-                        t|stop)
-                            systemctl stop "$selected_tunnel"
-                            print_success "Stopped $selected_tunnel"
-                            sleep 1
-                            ;;
-                        r|restart)
-                            systemctl restart "$selected_tunnel"
-                            print_success "Restarted $selected_tunnel"
-                            sleep 1
-                            ;;
-                        l|logs)
-                            echo ""
-                            echo -e "${CYAN}   Showing last 20 lines of logs (press Ctrl+C to exit live logs):${NC}"
-                            echo ""
-                            journalctl -u "$selected_tunnel" -n 20 --no-pager
-                            echo ""
-                            read -p "$(echo -e "${WHITE}   Show live logs? [y/N]: ${NC}")" show_live
-                            if [[ "${show_live,,}" == "y" ]]; then
-                                journalctl -u "$selected_tunnel" -f
-                            fi
-                            ;;
-                        d|delete)
-                            echo ""
-                            read -p "$(echo -e "${RED}   Are you sure you want to delete ${selected_tunnel}? [y/N]: ${NC}")" confirm
-                            if [[ "${confirm,,}" == "y" ]]; then
-                                systemctl stop "$selected_tunnel" 2>/dev/null
-                                systemctl disable "$selected_tunnel" 2>/dev/null
-                                
-                                # پیدا کردن و حذف فایل کانفیگ
-                                local config_path=$(grep "ExecStart" "${SERVICE_DIR}/${selected_tunnel}.service" | sed 's/.*-c //' | tr -d ' ')
-                                
-                                rm -f "${SERVICE_DIR}/${selected_tunnel}.service"
-                                rm -f "$config_path"
-                                
-                                systemctl daemon-reload
-                                
-                                print_success "Deleted $selected_tunnel"
-                                sleep 1
-                            fi
-                            ;;
-                    esac
-                else
-                    print_error "Invalid tunnel number"
+        # برگشت به منو
+        if [[ "$tunnel_num" == "0" ]] || [[ "${tunnel_num,,}" == "b" ]] || [[ -z "$tunnel_num" ]]; then
+            return
+        fi
+        
+        # بررسی معتبر بودن شماره
+        if ! [[ "$tunnel_num" =~ ^[0-9]+$ ]] || [[ $tunnel_num -lt 1 ]] || [[ $tunnel_num -gt ${#tunnels[@]} ]]; then
+            print_error "Invalid tunnel number"
+            sleep 1
+            continue
+        fi
+        
+        local selected_tunnel="${tunnels[$((tunnel_num-1))]}"
+        
+        # نمایش منوی اکشن برای تونل انتخاب شده
+        while true; do
+            print_header
+            echo -e "${BOLD}${CYAN}   ╭─────────────────────────────────────────────╮${NC}"
+            echo -e "${BOLD}${CYAN}   │   Managing: ${WHITE}${selected_tunnel}${NC}"
+            echo -e "${BOLD}${CYAN}   ╰─────────────────────────────────────────────╯${NC}"
+            echo ""
+            
+            # نمایش وضعیت فعلی
+            local current_status=$(systemctl is-active "$selected_tunnel" 2>/dev/null)
+            case $current_status in
+                active)
+                    echo -e "   Status: ${GREEN}● Running${NC}"
+                    ;;
+                inactive)
+                    echo -e "   Status: ${RED}○ Stopped${NC}"
+                    ;;
+                *)
+                    echo -e "   Status: ${YELLOW}◐ $current_status${NC}"
+                    ;;
+            esac
+            
+            echo ""
+            print_separator
+            echo ""
+            echo -e "   ${GREEN}[1]${NC} Start"
+            echo -e "   ${RED}[2]${NC} Stop"
+            echo -e "   ${YELLOW}[3]${NC} Restart"
+            echo -e "   ${CYAN}[4]${NC} View Logs"
+            echo -e "   ${PURPLE}[5]${NC} Delete Tunnel"
+            echo ""
+            echo -e "   ${DIM}[0]${NC} Back"
+            echo ""
+            
+            read -p "$(echo -e "${WHITE}   Select action: ${NC}")" action
+            
+            case $action in
+                1|s|S|start)
+                    systemctl start "$selected_tunnel"
+                    print_success "Started $selected_tunnel"
                     sleep 1
-                fi
-                ;;
-            *)
-                if [[ "$choice" =~ ^[0-9]+$ ]]; then
-                    print_warning "Please select an action (S/T/R/L/D) first"
+                    ;;
+                2|t|T|stop)
+                    systemctl stop "$selected_tunnel"
+                    print_success "Stopped $selected_tunnel"
                     sleep 1
-                fi
-                ;;
-        esac
+                    ;;
+                3|r|R|restart)
+                    systemctl restart "$selected_tunnel"
+                    print_success "Restarted $selected_tunnel"
+                    sleep 1
+                    ;;
+                4|l|L|logs)
+                    echo ""
+                    echo -e "${CYAN}   Last 30 lines of logs:${NC}"
+                    echo ""
+                    journalctl -u "$selected_tunnel" -n 30 --no-pager
+                    echo ""
+                    read -p "$(echo -e "${WHITE}   Show live logs? [y/N]: ${NC}")" show_live
+                    if [[ "${show_live,,}" == "y" ]]; then
+                        echo -e "${YELLOW}   Press Ctrl+C to exit live logs${NC}"
+                        sleep 1
+                        journalctl -u "$selected_tunnel" -f
+                    fi
+                    ;;
+                5|d|D|delete)
+                    echo ""
+                    read -p "$(echo -e "${RED}   Are you sure you want to delete ${selected_tunnel}? [y/N]: ${NC}")" confirm
+                    if [[ "${confirm,,}" == "y" ]]; then
+                        systemctl stop "$selected_tunnel" 2>/dev/null
+                        systemctl disable "$selected_tunnel" 2>/dev/null
+                        
+                        # پیدا کردن و حذف فایل کانفیگ
+                        local config_path=$(grep "ExecStart" "${SERVICE_DIR}/${selected_tunnel}.service" | sed 's/.*-c //' | tr -d ' ')
+                        
+                        rm -f "${SERVICE_DIR}/${selected_tunnel}.service"
+                        rm -f "$config_path"
+                        
+                        systemctl daemon-reload
+                        
+                        print_success "Deleted $selected_tunnel"
+                        sleep 1
+                        break  # برگشت به لیست تونل‌ها
+                    fi
+                    ;;
+                0|b|B|back|"")
+                    break
+                    ;;
+                *)
+                    print_error "Invalid option"
+                    sleep 1
+                    ;;
+            esac
+        done
     done
 }
 

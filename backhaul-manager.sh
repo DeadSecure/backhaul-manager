@@ -52,6 +52,12 @@ clear_screen() {
 
 print_header() {
     clear_screen
+    
+    # گرفتن IP ها
+    local ips=$(get_server_ips)
+    local ipv4=$(echo "$ips" | cut -d'|' -f1)
+    local ipv6=$(echo "$ips" | cut -d'|' -f2)
+    
     echo -e "${GRADIENT1}"
     echo "╔═══════════════════════════════════════════════════════════════════╗"
     echo -e "${GRADIENT2}║${NC}  ${BOLD}${WHITE}____             _    _                 _${NC}                        ${GRADIENT2}║${NC}"
@@ -63,6 +69,15 @@ print_header() {
     echo -e "${GRADIENT3}║                                                                   ║${NC}"
     echo -e "${GRADIENT3}║${NC}            ${YELLOW}✦ Tunnel Manager v1.0 ✦${NC}                              ${GRADIENT3}║${NC}"
     echo -e "${GRADIENT4}╚═══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # نمایش IP ها
+    if [[ -n "$ipv4" ]]; then
+        echo -e "   ${WHITE}IPv4:${NC} ${GREEN}${ipv4}${NC}"
+    fi
+    if [[ -n "$ipv6" ]]; then
+        echo -e "   ${WHITE}IPv6:${NC} ${CYAN}${ipv6}${NC}"
+    fi
     echo ""
 }
 
@@ -84,6 +99,19 @@ print_warning() {
 
 print_info() {
     echo -e "${CYAN}[i]${NC} $1"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# گرفتن IP سرور
+# ─────────────────────────────────────────────────────────────────────────────────
+get_server_ips() {
+    # گرفتن IPv4 عمومی (غیر از localhost)
+    local ipv4=$(ip -4 addr show scope global 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+    
+    # گرفتن IPv6 عمومی
+    local ipv6=$(ip -6 addr show scope global 2>/dev/null | grep -oP '(?<=inet6\s)[0-9a-f:]+(?=/)' | head -1)
+    
+    echo "$ipv4|$ipv6"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────

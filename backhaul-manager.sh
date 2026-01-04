@@ -266,8 +266,40 @@ list_tunnels() {
                     ;;
             esac
             
+            # بررسی وضعیت اتصال از لاگ‌ها
+            local connection_status=""
+            local connection_color=""
+            if [[ "$status" == "active" ]]; then
+                # چک کردن آخرین وضعیت اتصال از لاگ‌ها
+                local last_log=$(journalctl -u "$service_name" -n 50 --no-pager 2>/dev/null | tail -30)
+                
+                if echo "$last_log" | grep -q "control channel successfully established"; then
+                    # چک کنیم که بعدش ارور نداشته باشه
+                    local last_established=$(echo "$last_log" | grep -n "control channel successfully established" | tail -1 | cut -d: -f1)
+                    local last_error=$(echo "$last_log" | grep -n "\[ERROR\]" | tail -1 | cut -d: -f1)
+                    
+                    if [[ -z "$last_error" ]] || [[ "$last_established" -gt "$last_error" ]]; then
+                        connection_status="CONNECTED"
+                        connection_color="${GREEN}"
+                    else
+                        connection_status="DISCONNECTED"
+                        connection_color="${RED}"
+                    fi
+                elif echo "$last_log" | grep -q "\[ERROR\]"; then
+                    connection_status="ERROR"
+                    connection_color="${RED}"
+                else
+                    connection_status="WAITING"
+                    connection_color="${YELLOW}"
+                fi
+            else
+                connection_status="STOPPED"
+                connection_color="${RED}"
+            fi
+            
             echo -e "${CYAN}┌─────────────────────────────────────────────────────────────┐${NC}"
             echo -e "${CYAN}│${NC} ${BOLD}${WHITE}Service:${NC} ${YELLOW}${service_name}${NC}  ${status_color}${status_icon} ${status}${NC}"
+            echo -e "${CYAN}│${NC} ${BOLD}Connection:${NC} ${connection_color}${connection_status}${NC}"
             echo -e "${CYAN}│${NC} ${DIM}Config:${NC} ${config_path}"
             
             # خواندن اطلاعات از فایل کانفیگ

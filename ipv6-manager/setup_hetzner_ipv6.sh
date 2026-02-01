@@ -92,9 +92,10 @@ echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     netplan apply
     echo -e "${GREEN}Configuration applied successfully!${NC}"
+    echo -e "Configured IPv6 Address: ${GREEN}$IPV6_ADDRESS${NC}"
     
-    echo -e "${YELLOW}Testing IPv6 connectivity...${NC}"
-    ping6 -c 3 google.com || echo -e "${RED}Ping failed (might just be delay), check connection manually.${NC}"
+    echo -e "${YELLOW}Testing IPv6 connectivity... (Press Ctrl+C to stop)${NC}"
+    ping6 google.com
 else
     echo -e "${RED}Changes NOT applied. File is saved at $NETPLAN_FILE but not active.${NC}"
 fi

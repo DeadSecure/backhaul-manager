@@ -46,6 +46,15 @@ install_prerequisites() {
     fi
 
     # 3. Install Phantun
+    if [ -f "$PHANTUN_BIN_DIR/phantun.server" ] && [ -f "$PHANTUN_BIN_DIR/phantun.client" ]; then
+        echo -e "${GREEN}Phantun binaries detected in $PHANTUN_BIN_DIR.${NC}"
+        read -p "Redownload and reinstall Phantun? (y/n): " choice
+        if [[ "$choice" != "y" ]]; then
+            echo "Skipping download."
+            return
+        fi
+    fi
+
     echo "Checking Phantun..."
     PHANTUN_URL="https://github.com/dndx/phantun/releases/download/v0.8.1/phantun_x86_64-unknown-linux-musl.zip"
     

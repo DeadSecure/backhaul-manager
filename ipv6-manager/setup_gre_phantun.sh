@@ -39,44 +39,69 @@ install_prerequisites() {
         apt-get update && apt-get install -y curl
     fi
 
-    # 2. Install Phantun
-    echo "Checking Phantun..."
-    if [ ! -f "$PHANTUN_BIN_DIR/phantun.server" ] || [ ! -f "$PHANTUN_BIN_DIR/phantun.client" ]; then
-        echo "Downloading Phantun from GitHub..."
-        # Note: Taking the generic x86_64 musl build. User can replace URL if needed.
-        curl -4L -o "$PHANTUN_BIN_DIR/phantun" "$PHANTUN_URL"
-        
-        if [ $? -eq 0 ]; then
-            chmod +x "$PHANTUN_BIN_DIR/phantun"
-            # Create symlinks for clarity/service usage
-            ln -sf "$PHANTUN_BIN_DIR/phantun" "$PHANTUN_BIN_DIR/phantun.server"
-            ln -sf "$PHANTUN_BIN_DIR/phantun" "$PHANTUN_BIN_DIR/phantun.client"
-            echo -e "${GREEN}Phantun installed successfully to $PHANTUN_BIN_DIR${NC}"
-        else
-            echo -e "${RED}Failed to download Phantun. Please check your internet connection or URL.${NC}"
-            return 1
-        fi
-    else
-        echo -e "${GREEN}Phantun is already installed.${NC}"
+    # 2. Check Unzip
+    if ! command -v unzip &> /dev/null; then
+        echo "Installing unzip..."
+        apt-get update && apt-get install -y unzip
     fi
 
+    # 3. Install Phantun
+    echo "Checking Phantun..."
+    PHANTUN_URL="https://github.com/dndx/phantun/releases/download/v0.8.1/phantun_x86_64-unknown-linux-musl.zip"
+    
+    # Remove old garbage
+    rm -f "$PHANTUN_BIN_DIR/phantun" "$PHANTUN_BIN_DIR/phantun.zip"
+
+    echo "Downloading Phantun from GitHub..."
+    curl -4L -o "$PHANTUN_BIN_DIR/phantun.zip" "$PHANTUN_URL"
+    
+    # Verify Download Size (Minimum 1MB)
+    FILE_SIZE=$(stat -c%s "$PHANTUN_BIN_DIR/phantun.zip" 2>/dev/null || echo 0)
+    if [ "$FILE_SIZE" -lt 1000000 ]; then
+        echo -e "${RED}Error: Downloaded file is too small ($FILE_SIZE bytes). Check internet/URL.${NC}"
+        rm -f "$PHANTUN_BIN_DIR/phantun.zip"
+        return 1
+    fi
+    
+    # Extract
+    unzip -o "$PHANTUN_BIN_DIR/phantun.zip" -d "$PHANTUN_BIN_DIR/"
+    
+    # Locate Binary (It might be named phantun_server/client or just phantun)
+    # Based on v0.8.1, it contains 'server' and 'client' binaries or similar. 
+    # Let's find any executable that is not the zip
+    if [ -f "$PHANTUN_BIN_DIR/server" ]; then
+        mv "$PHANTUN_BIN_DIR/server" "$PHANTUN_BIN_DIR/phantun.server"
+        mv "$PHANTUN_BIN_DIR/client" "$PHANTUN_BIN_DIR/phantun.client"
+    elif [ -f "$PHANTUN_BIN_DIR/phantun_server" ]; then
+        mv "$PHANTUN_BIN_DIR/phantun_server" "$PHANTUN_BIN_DIR/phantun.server"
+        mv "$PHANTUN_BIN_DIR/phantun_client" "$PHANTUN_BIN_DIR/phantun.client"
+    fi
+    # If standard 'phantun' binary exists (older versions)
+    if [ -f "$PHANTUN_BIN_DIR/phantun" ]; then
+         ln -sf "$PHANTUN_BIN_DIR/phantun" "$PHANTUN_BIN_DIR/phantun.server"
+         ln -sf "$PHANTUN_BIN_DIR/phantun" "$PHANTUN_BIN_DIR/phantun.client"
+    fi
+
+    chmod +x "$PHANTUN_BIN_DIR/phantun.server" "$PHANTUN_BIN_DIR/phantun.client"
+
+    echo -e "${GREEN}Phantun installed successfully.${NC}"
+
     echo -e "${YELLOW}Enabling IP Forwarding...${NC}"
-    # Validating
-    if ! "$PHANTUN_BIN_DIR/phantun" -V &> /dev/null; then
-         echo -e "${RED}Error: Phantun binary found but not executable. Re-installing...${NC}"
-         rm -f "$PHANTUN_BIN_DIR/phantun"
-         install_prerequisites
+    # Validation
+    if [ ! -f "$PHANTUN_BIN_DIR/phantun.server" ]; then
+         echo -e "${RED}Error: Installation failed. Binaries not found.${NC}"
+         return 1
     fi
 }
 
 check_binary() {
-    if [ ! -f "$PHANTUN_BIN_DIR/phantun" ]; then
+    if [ ! -f "$PHANTUN_BIN_DIR/phantun.server" ]; then
         echo -e "${YELLOW}Phantun binary not found. Installing...${NC}"
         install_prerequisites
     fi
     
     # Check again
-    if [ ! -f "$PHANTUN_BIN_DIR/phantun" ]; then
+    if [ ! -f "$PHANTUN_BIN_DIR/phantun.server" ]; then
          echo -e "${RED}Critical Error: Phantun installation failed.${NC}"
          exit 1
     fi

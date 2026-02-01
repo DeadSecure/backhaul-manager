@@ -46,15 +46,6 @@ install_prerequisites() {
     fi
 
     # 3. Install Phantun
-    if [ -f "$PHANTUN_BIN_DIR/phantun.server" ] && [ -f "$PHANTUN_BIN_DIR/phantun.client" ]; then
-        echo -e "${GREEN}Phantun binaries detected in $PHANTUN_BIN_DIR.${NC}"
-        read -p "Redownload and reinstall Phantun? (y/n): " choice
-        if [[ "$choice" != "y" ]]; then
-            echo "Skipping download."
-            return
-        fi
-    fi
-
     echo "Checking Phantun..."
     PHANTUN_URL="https://github.com/dndx/phantun/releases/download/v0.8.1/phantun_x86_64-unknown-linux-musl.zip"
     
@@ -144,55 +135,46 @@ setup_tunnel() {
     if [[ ! "$TUN_ID" =~ ^[0-9]+$ ]]; then TUN_ID=1; fi
 
     # Calculate Ports
-    # Base: 4500 (TCP), 5500 (UDP FOU)
+    # Base: 4500 (TCP)
     TCP_PORT=$((4500 + TUN_ID))
-    UDP_FOU_PORT=$((5500 + TUN_ID))
 
     # IP Addressing (10.10.ID.x)
-    GRE_IP_IRAN="10.10.${TUN_ID}.1"
-    GRE_IP_KHAREJ="10.10.${TUN_ID}.2"
+    TUN_IP_IRAN="10.10.${TUN_ID}.1"
+    TUN_IP_KHAREJ="10.10.${TUN_ID}.2"
+    TUN_NETMASK="255.255.255.252"
+
+    TUN_NAME="ph_tun${TUN_ID}"
 
     if [ "$ROLE" == "IRAN" ]; then
         read -p "Enter Remote Server (Kharej) IP: " REMOTE_IP
         
-        PHANTUN_LOCAL="127.0.0.1:$UDP_FOU_PORT"
-        PHANTUN_REMOTE="$REMOTE_IP:$TCP_PORT"
-        
-        MY_GRE_IP="$GRE_IP_IRAN"
-        PEER_GRE_IP="$GRE_IP_KHAREJ"
-        
-        # In Phantun Client: Listen on UDP (Local), Forward to TCP (Remote)
-        # But wait, we want the Phantun Client to listen on 127.0.0.1 UDP so FOU can send to it?
-        # Phantun Client: --local <local_socket_addr> --remote <remote_socket_addr>
-        # Local is where it LISTENS. Remote is where it SENDS.
-        # Flow: Kernel (GRE) -> FOU (UDP) -> Phantun Client (UDP Listen) -> Internet (TCP) -> Kharej
-        PHANTUN_ARGS="--local $PHANTUN_LOCAL --remote $PHANTUN_REMOTE"
+        # Client Mode:
+        # --remote: Target Server
+        # --tun: Interface Name
+        # --tun-local: My IP (Client IP)
+        # --tun-peer: Peer IP (Server IP)
+        PHANTUN_ARGS="--remote $REMOTE_IP:$TCP_PORT --tun $TUN_NAME --tun-local $TUN_IP_IRAN --tun-peer $TUN_IP_KHAREJ"
         
     else # KHAREJ
-        PHANTUN_LOCAL="0.0.0.0:$TCP_PORT"
-        PHANTUN_REMOTE="127.0.0.1:$UDP_FOU_PORT"
-        
-        MY_GRE_IP="$GRE_IP_KHAREJ"
-        PEER_GRE_IP="$GRE_IP_IRAN"
-        
-        # In Phantun Server: Listen on TCP (Local), Forward to UDP (Remote)
-        # Flow: Internet (TCP) -> Phantun Server (TCP Listen) -> FOU (UDP) -> Kernel (GRE)
-        # Note: Phantun Server needs to send TO the FOU port.
-        PHANTUN_ARGS="--local $PHANTUN_LOCAL --remote $PHANTUN_REMOTE"
+        # Server Mode:
+        # --local: Listen Port (TCP)
+        # --tun: Interface Name
+        # --tun-local: My IP (Server IP)
+        # --tun-peer: Peer IP (Client IP)
+        PHANTUN_ARGS="--local 0.0.0.0:$TCP_PORT --tun $TUN_NAME --tun-local $TUN_IP_KHAREJ --tun-peer $TUN_IP_IRAN"
     fi
 
     echo -e "\n${BLUE}Plan for Tunnel $TUN_ID ($ROLE):${NC}"
-    echo -e "   GRE IP      : $MY_GRE_IP <-> $PEER_GRE_IP"
-    echo -e "   Phantun Listen : $PHANTUN_LOCAL"
-    echo -e "   Phantun Target : $PHANTUN_REMOTE"
-    echo -e "   FOU Port       : $UDP_FOU_PORT"
-    echo -e "   TCP Port       : $TCP_PORT (Public)"
+    echo -e "   Interface  : $TUN_NAME"
+    echo -e "   Local IP   : $(echo $PHANTUN_ARGS | grep -oP 'tun-local \K[^ ]+')"
+    echo -e "   Remote IP  : $(echo $PHANTUN_ARGS | grep -oP 'tun-peer \K[^ ]+')"
+    echo -e "   TCP Port   : $TCP_PORT"
     echo ""
     read -p "Press ENTER to install..."
 
     log "Configuring Tunnel $TUN_ID..."
 
-    # 3. Create Systemd Service for Phantun
+    # 3. Create Systemd Service for Phantun (Native TUN Mode)
     cat > "/etc/systemd/system/phantun-${TUN_ID}.service" <<EOF
 [Unit]
 Description=Phantun Tunnel ${TUN_ID}
@@ -203,77 +185,27 @@ Type=simple
 ExecStart=$PHANTUN_BIN_DIR/phantun.${PHANTUN_MODE} $PHANTUN_ARGS
 Restart=always
 RestartSec=3
+# Optimize buffers for high speed
+ExecStartPre=/sbin/sysctl -w net.core.rmem_max=2500000
+ExecStartPre=/sbin/sysctl -w net.core.wmem_max=2500000
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    # 4. Create Network Script (FOU + GRE)
-    cat > "/usr/local/bin/tun-up-${TUN_ID}.sh" <<EOF
-#!/bin/bash
-# Load modules
-modprobe ip_gre
-modprobe fou
+    # 4. Remove Legacy GRE Service if exists
+    systemctl disable "gre-net-${TUN_ID}" 2>/dev/null
+    systemctl stop "gre-net-${TUN_ID}" 2>/dev/null
+    rm -f "/etc/systemd/system/gre-net-${TUN_ID}.service"
+    rm -f "/usr/local/bin/tun-up-${TUN_ID}.sh"
 
-# Clean up
-ip link del gre_tun${TUN_ID} 2>/dev/null
-ip fou del port $UDP_FOU_PORT 2>/dev/null
-
-# Setup FOU
-# We tell kernel: UDP packets on $UDP_FOU_PORT are GRE (47)
-ip fou add port $UDP_FOU_PORT ipproto 47
-
-# Setup GRE
-# We create a GRE interface that encapsulates into FOU (UDP)
-# Remote 127.0.0.1 because Phantun handles the transport
-# On Client (Iran): Kernel sends to 127.0.0.1:$UDP_FOU_PORT (Phantun listens there)
-# On Server (Kharej): Phantun sends to 127.0.0.1:$UDP_FOU_PORT (Kernel listens there)
-
-# Wait... for Client (Iran):
-# Kernel -> FOU Encap -> UDP (Dest 127.0.0.1:$UDP_FOU_PORT) -> Phantun Client picks up
-# For this to work, we need 'encap fou encap-dport $UDP_FOU_PORT'
-# IMPORTANT: 'local' and 'remote' on GRE interface logic:
-# When encap is used, 'remote' is the UNDERLYING destination. 
-# Here, we want the underlying packet to go to 127.0.0.1 so Phantun can catch it.
-
-ip link add name gre_tun${TUN_ID} type gre \\
-    local 127.0.0.1 \\
-    remote 127.0.0.1 \\
-    ttl 255 \\
-    encap fou \\
-    encap-sport auto \\
-    encap-dport $UDP_FOU_PORT
-
-ip addr add $MY_GRE_IP/30 dev gre_tun${TUN_ID}
-ip link set gre_tun${TUN_ID} up
-ip link set gre_tun${TUN_ID} mtu 1400
-EOF
-    chmod +x "/usr/local/bin/tun-up-${TUN_ID}.sh"
-
-    # 5. Create Systemd for Network
-    cat > "/etc/systemd/system/gre-net-${TUN_ID}.service" <<EOF
-[Unit]
-Description=GRE Network Setup for Tunnel ${TUN_ID}
-After=phantun-${TUN_ID}.service
-Requires=phantun-${TUN_ID}.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/tun-up-${TUN_ID}.sh
-RemainAfterExit=yes
-ExecStop=/sbin/ip link del gre_tun${TUN_ID}
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # 6. Enable & Start
+    # 5. Enable & Start
     systemctl daemon-reload
-    systemctl enable "phantun-${TUN_ID}" "gre-net-${TUN_ID}"
-    systemctl restart "phantun-${TUN_ID}" "gre-net-${TUN_ID}"
+    systemctl enable "phantun-${TUN_ID}"
+    systemctl restart "phantun-${TUN_ID}"
 
     echo -e "${GREEN}✅ Tunnel $TUN_ID Installed!${NC}"
-    echo "Check status: systemctl status gre-net-${TUN_ID}"
+    echo "Check status: systemctl status phantun-${TUN_ID}"
 }
 
 # ==========================================

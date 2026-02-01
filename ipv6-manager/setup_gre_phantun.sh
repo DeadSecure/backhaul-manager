@@ -61,8 +61,25 @@ install_prerequisites() {
     fi
 
     echo -e "${YELLOW}Enabling IP Forwarding...${NC}"
-    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-phantun-fwd.conf
-    sysctl -p /etc/sysctl.d/99-phantun-fwd.conf
+    # Validating
+    if ! "$PHANTUN_BIN_DIR/phantun" -V &> /dev/null; then
+         echo -e "${RED}Error: Phantun binary found but not executable. Re-installing...${NC}"
+         rm -f "$PHANTUN_BIN_DIR/phantun"
+         install_prerequisites
+    fi
+}
+
+check_binary() {
+    if [ ! -f "$PHANTUN_BIN_DIR/phantun" ]; then
+        echo -e "${YELLOW}Phantun binary not found. Installing...${NC}"
+        install_prerequisites
+    fi
+    
+    # Check again
+    if [ ! -f "$PHANTUN_BIN_DIR/phantun" ]; then
+         echo -e "${RED}Critical Error: Phantun installation failed.${NC}"
+         exit 1
+    fi
 }
 
 # ==========================================
@@ -70,6 +87,7 @@ install_prerequisites() {
 # ==========================================
 
 setup_tunnel() {
+    check_binary
     echo -e "${BLUE}--- Setup GRE + Phantun Tunnel ---${NC}"
 
     # 1. Role Selection

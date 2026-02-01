@@ -242,7 +242,7 @@ uninstall_tunnel() {
 
 clear
 echo -e "${GREEN}====================================${NC}"
-echo -e "${GREEN}    GRE + Phantun Tunnel Setup      ${NC}"
+echo -e "${GREEN}    GRE + Phantun Tunnel Setup v2.0 (TUN)   ${NC}"
 echo -e "${GREEN}====================================${NC}"
 echo "1) Install Prerequisites (Phantun)"
 echo "2) Add New Tunnel connection"

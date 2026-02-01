@@ -162,7 +162,7 @@ setup_tunnel() {
         # --tun-local: My IP (Server IP)
         # --tun-peer: Peer IP (Client IP)
         # --remote: Required by binary but unused in pure TUN routing. Point to dummy.
-        PHANTUN_ARGS="--local 0.0.0.0:$TCP_PORT --remote 127.0.0.1:12345 --tun $TUN_NAME --tun-local $TUN_IP_KHAREJ --tun-peer $TUN_IP_IRAN"
+        PHANTUN_ARGS="--local $TCP_PORT --remote 127.0.0.1:12345 --tun $TUN_NAME --tun-local $TUN_IP_KHAREJ --tun-peer $TUN_IP_IRAN"
     fi
 
     echo -e "\n${BLUE}Plan for Tunnel $TUN_ID ($ROLE):${NC}"

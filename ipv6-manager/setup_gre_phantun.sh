@@ -148,14 +148,15 @@ setup_tunnel() {
     if [ "$ROLE" == "IRAN" ]; then
         read -p "Enter Remote Server (Kharej) IP: " REMOTE_IP
         
+        MY_GRE_IP="$TUN_IP_IRAN"
         # Client Mode:
         # --remote: Target Server
         # --tun: Interface Name
         # --tun-local: My IP (Client IP)
         # --tun-peer: Peer IP (Server IP)
-        PHANTUN_ARGS="--remote $REMOTE_IP:$TCP_PORT --tun $TUN_NAME --tun-local $TUN_IP_IRAN --tun-peer $TUN_IP_KHAREJ"
+        PHANTUN_ARGS="--local 127.0.0.1:$UDP_FOU_PORT --remote $REMOTE_IP:$TCP_PORT --tun $TUN_NAME --tun-local $TUN_IP_IRAN --tun-peer $TUN_IP_KHAREJ"
         
-    else # KHAREJ
+        MY_GRE_IP="$TUN_IP_KHAREJ"
         # Server Mode:
         # --local: Listen Port (TCP)
         # --remote: UDP Target (Required, using dummy)
@@ -190,6 +191,9 @@ RestartSec=3
 ExecStartPre=/sbin/sysctl -w net.core.rmem_max=2500000
 ExecStartPre=/sbin/sysctl -w net.core.wmem_max=2500000
 
+ExecStartPost=/sbin/ip link set dev $TUN_NAME up mtu 1400
+ExecStartPost=/sbin/ip addr add $MY_GRE_IP/30 dev $TUN_NAME
+
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -206,6 +210,8 @@ EOF
     systemctl restart "phantun-${TUN_ID}"
 
     echo -e "${GREEN}✅ Tunnel $TUN_ID Installed!${NC}"
+    echo -e "   Interface: $TUN_NAME"
+    echo -e "   IP: $MY_GRE_IP"
     echo "Check status: systemctl status phantun-${TUN_ID}"
 }
 

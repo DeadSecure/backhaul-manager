@@ -44,7 +44,7 @@ install_prerequisites() {
     if [ ! -f "$PHANTUN_BIN_DIR/phantun.server" ] || [ ! -f "$PHANTUN_BIN_DIR/phantun.client" ]; then
         echo "Downloading Phantun from GitHub..."
         # Note: Taking the generic x86_64 musl build. User can replace URL if needed.
-        curl -L -o "$PHANTUN_BIN_DIR/phantun" "$PHANTUN_URL"
+        curl -4L -o "$PHANTUN_BIN_DIR/phantun" "$PHANTUN_URL"
         
         if [ $? -eq 0 ]; then
             chmod +x "$PHANTUN_BIN_DIR/phantun"

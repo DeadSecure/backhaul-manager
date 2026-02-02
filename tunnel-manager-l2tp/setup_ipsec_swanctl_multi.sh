@@ -295,6 +295,9 @@ check_tunnels() {
     # Silently capture swanctl output. If it fails, variable is empty. No stderr.
     local swan_out=$(swanctl --list-sas 2>/dev/null)
     
+    # Reset failed states to ensure accurate reading (Fixes false positives)
+    systemctl reset-failed "ipsec-gre-*" >/dev/null 2>&1
+    
     # Find all GRE services
     for service_file in /etc/systemd/system/ipsec-gre-*.service; do
         if [ ! -f "$service_file" ]; then continue; fi

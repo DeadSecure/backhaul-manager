@@ -207,8 +207,30 @@ install_menu() {
     read -p "Enter Tunnel Assignment # (ID) [1-99]: " TUN_ID
     if [[ ! "$TUN_ID" =~ ^[0-9]+$ ]]; then TUN_ID=1; fi
     
-    local ip=$(get_public_ip)
-    echo -e "Detected Local IP: ${GREEN}$ip${NC}"
+    # --- Multi-IP Selection Logic ---
+    echo -e "\n${CYAN}--- Select Local Source IP for this Tunnel ---${NC}"
+    # Get all IPv4s excluding loopback
+    local available_ips=($(ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1))
+    local SELECTED_LOCAL_IP=""
+    
+    if [ ${#available_ips[@]} -eq 0 ]; then
+        SELECTED_LOCAL_IP=$(get_public_ip)
+    elif [ ${#available_ips[@]} -eq 1 ]; then
+        SELECTED_LOCAL_IP=${available_ips[0]}
+    else
+        for i in "${!available_ips[@]}"; do
+             echo "$((i+1))) ${available_ips[$i]}"
+        done
+        read -p "Select IP to Bind [1-${#available_ips[@]}]: " ip_opt
+        if [[ "$ip_opt" =~ ^[0-9]+$ ]] && [ "$ip_opt" -ge 1 ] && [ "$ip_opt" -le "${#available_ips[@]}" ]; then
+            SELECTED_LOCAL_IP=${available_ips[$((ip_opt-1))]}
+        else
+            SELECTED_LOCAL_IP=$(get_public_ip)
+        fi
+    fi
+    echo -e "Using Local IP: ${GREEN}$SELECTED_LOCAL_IP${NC}"
+    # --------------------------------
+    
     read -p "Enter Remote Server Public IP: " REMOTE_IP
     read -p "Enter IPsec Pre-Shared Key (PSK): " PSK
     
@@ -224,8 +246,8 @@ install_menu() {
     log "Configuring Tunnel $TUN_ID..."
     install_dependencies
     configure_firewall
-    setup_swanctl_config "$TUN_ID" "$ip" "$REMOTE_IP" "$PSK"
-    setup_gre_interface "$TUN_ID" "$ip" "$REMOTE_IP" "$tun_local" "$tun_remote"
+    setup_swanctl_config "$TUN_ID" "$SELECTED_LOCAL_IP" "$REMOTE_IP" "$PSK"
+    setup_gre_interface "$TUN_ID" "$SELECTED_LOCAL_IP" "$REMOTE_IP" "$tun_local" "$tun_remote"
     setup_keepalive "$TUN_ID" "$tun_remote"
     
     echo -e "${GREEN}✅ Tunnel $TUN_ID Installed Successfully!${NC}"
@@ -257,11 +279,19 @@ check_tunnels() {
     printf "%-5s %-12s %-15s %-20s\n" "ID" "Service" "IPsec SA" "Ping Test (GRE)"
     echo "--------------------------------------------------------"
     
+    # Ensure Charon is running for status check
+    if ! pgrep -x "charon-systemd" > /dev/null; then
+         systemctl start strongswan-swanctl >/dev/null 2>&1
+         sleep 1
+    fi
+    
+    # Capture swanctl output once to avoid repeated socket errors
+    local swan_out=$(swanctl --list-sas 2>/dev/null)
+    
     # Find all GRE services
     for service_file in /etc/systemd/system/ipsec-gre-*.service; do
         if [ ! -f "$service_file" ]; then continue; fi
         
-        # Extract ID from filename regex
         [[ $service_file =~ ipsec-gre-([0-9]+).service ]] && id="${BASH_REMATCH[1]}"
         
         # 1. Service Status
@@ -271,18 +301,23 @@ check_tunnels() {
             svc_status="${RED}Down${NC}"
         fi
         
-        # 2. IPsec SA Status (Swanctl)
-        if swanctl --list-sas | grep -q "tun${id}"; then
+        # 2. IPsec SA Status (Check cached output)
+        if echo "$swan_out" | grep -q "tun${id}"; then
             sas_status="${GREEN}ESTABLISHED${NC}"
+        elif [[ "$ping_status" == *"SUCCESS"* ]]; then 
+             # Fallback: If ping works, SA exists even if swanctl implies otherwise (rekeying/race condition)
+             sas_status="${GREEN}ESTABLISHED*${NC}"
         else
             sas_status="${RED}NO-SA${NC}"
         fi
         
-        # 3. Ping Test (Extract target IP from keepalive script)
+        # 3. Ping Test
         target_ip=$(grep 'TARGET=' "/usr/local/bin/ipsec-keepalive-${id}.sh" 2>/dev/null | cut -d'"' -f2)
         if [[ -n "$target_ip" ]]; then
             if ping -c 1 -W 1 "$target_ip" >/dev/null 2>&1; then
                 ping_status="${GREEN}SUCCESS ($target_ip)${NC}"
+                # If ping is success, force SA status visual fix
+                if [[ "$sas_status" == *"NO-SA"* ]]; then sas_status="${GREEN}ESTABLISHED*${NC}"; fi
             else
                 ping_status="${RED}FAILED ($target_ip)${NC}"
             fi

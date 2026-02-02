@@ -304,15 +304,6 @@ check_tunnels() {
         
         [[ $service_file =~ ipsec-gre-([0-9]+).service ]] && id="${BASH_REMATCH[1]}"
         
-        # 1. Service Status (Check if GRE interface actually exists)
-        if ip link show "gre${id}" >/dev/null 2>&1; then
-            svc_status="${GREEN}Active (Up)${NC}"
-        elif systemctl is-active --quiet "ipsec-gre-${id}"; then
-            svc_status="${GREEN}Active (Sysd)${NC}"
-        else
-            svc_status="${RED}Down${NC}"
-        fi
-        
         # 3. Ping Test FIRST (Source of Truth)
         target_ip=$(grep 'TARGET=' "/usr/local/bin/ipsec-keepalive-${id}.sh" 2>/dev/null | cut -d'"' -f2)
         if [[ -n "$target_ip" ]]; then
@@ -327,6 +318,19 @@ check_tunnels() {
             ping_status="${YELLOW}Unknown Target${NC}"
             is_connected=false
         fi
+
+        # 1. Service Status (Logic Update: If Ping works, Service IS Up)
+        if [ "$is_connected" = true ]; then
+             svc_status="${GREEN}Active (Verified)${NC}"
+        elif ip link show "gre${id}" >/dev/null 2>&1; then
+            svc_status="${GREEN}Active (Up)${NC}"
+        elif systemctl is-active --quiet "ipsec-gre-${id}"; then
+            svc_status="${GREEN}Active (Sysd)${NC}"
+        else
+            svc_status="${RED}Down${NC}"
+        fi
+
+        # 2. IPsec SA Status (Logic: If Ping works, SA IS UP regardless of swanctl api error)
 
         # 2. IPsec SA Status (Logic: If Ping works, SA IS UP regardless of swanctl api error)
         if echo "$swan_out" | grep -q "tun${id}"; then

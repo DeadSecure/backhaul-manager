@@ -168,13 +168,15 @@ setup_keepalive() {
 TARGET="$target"
 ID="$id"
 while true; do
-    if ! ping -c 3 -W 2 \$TARGET > /dev/null; then
+    # Logic matched with ssh-network-manager (Patient Keepalive)
+    if ! ping -c 6 -W 2 \$TARGET > /dev/null; then
         echo "Connection lost. Re-initiating IPsec..."
         swanctl --initiate --child tun\$ID
         sleep 2
         systemctl restart ipsec-gre-\$ID
+        sleep 5
     fi
-    sleep 5
+    sleep 4
 done
 EOF
     chmod +x "/usr/local/bin/ipsec-keepalive-${id}.sh"

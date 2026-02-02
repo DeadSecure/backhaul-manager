@@ -335,7 +335,8 @@ check_tunnels() {
             sas_status="${RED}NO-SA${NC}"
         fi
         
-        printf "%-5s %-20s %-35s %-20s\n" "$id" "$svc_status" "$sas_status" "$ping_status"
+        # Use %b to interpret color codes correctly
+        printf "%-5s %-30b %-45b %-30b\n" "$id" "$svc_status" "$sas_status" "$ping_status"
     done
     echo ""
     read -p "Press Enter to return..."

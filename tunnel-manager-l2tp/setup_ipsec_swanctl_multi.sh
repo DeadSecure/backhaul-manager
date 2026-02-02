@@ -146,7 +146,8 @@ After=strongswan-swanctl.service network.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/ipsec-gre-up-${id}.sh
-ExecStartPost=/usr/sbin/swanctl --initiate --child tun${id}
+# Ignore errors if SA is already up (prevents service from being marked Failed)
+ExecStartPost=-/usr/sbin/swanctl --initiate --child tun${id}
 RemainAfterExit=yes
 ExecStop=/sbin/ip tunnel del gre${id}
 

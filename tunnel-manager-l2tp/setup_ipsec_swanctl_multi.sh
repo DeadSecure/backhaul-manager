@@ -52,13 +52,17 @@ install_dependencies() {
     modprobe af_key >> "$LOG_FILE" 2>&1
     modprobe ip_gre >> "$LOG_FILE" 2>&1
     
-    # Enable Charon-Systemd
-    systemctl enable strongswan-swanctl >> "$LOG_FILE" 2>&1
-    systemctl start strongswan-swanctl >> "$LOG_FILE" 2>&1
-    
-    # If legacy starter is running, stop it
+    # CRITICAL: Disable legacy, Enable Modern
+    systemctl stop strongswan 2>/dev/null || true
+    systemctl disable strongswan 2>/dev/null || true
     systemctl stop strongswan-starter 2>/dev/null || true
     systemctl disable strongswan-starter 2>/dev/null || true
+    
+    # Enable Charon-Systemd (The VICI backend)
+    systemctl enable strongswan-swanctl >> "$LOG_FILE" 2>&1
+    systemctl restart strongswan-swanctl >> "$LOG_FILE" 2>&1
+    
+    sleep 2
 }
 
 configure_firewall() {
@@ -276,16 +280,16 @@ uninstall_menu() {
 
 check_tunnels() {
     echo -e "${BLUE}--- Tunnel Status Check ---${NC}"
-    printf "%-5s %-12s %-15s %-20s\n" "ID" "Service" "IPsec SA" "Ping Test (GRE)"
-    echo "--------------------------------------------------------"
+    printf "%-5s %-12s %-25s %-20s\n" "ID" "Service" "IPsec SA" "Ping Test (GRE)"
+    echo "------------------------------------------------------------------"
     
-    # Ensure Charon is running for status check
-    if ! pgrep -x "charon-systemd" > /dev/null; then
-         systemctl start strongswan-swanctl >/dev/null 2>&1
+    # Try to start daemon seamlessly if missing
+    if ! systemctl is-active --quiet strongswan-swanctl; then
+         systemctl restart strongswan-swanctl >/dev/null 2>&1
          sleep 1
     fi
     
-    # Capture swanctl output once to avoid repeated socket errors
+    # Silently capture swanctl output. If it fails, variable is empty. No stderr.
     local swan_out=$(swanctl --list-sas 2>/dev/null)
     
     # Find all GRE services
@@ -301,31 +305,31 @@ check_tunnels() {
             svc_status="${RED}Down${NC}"
         fi
         
-        # 2. IPsec SA Status (Check cached output)
-        if echo "$swan_out" | grep -q "tun${id}"; then
-            sas_status="${GREEN}ESTABLISHED${NC}"
-        elif [[ "$ping_status" == *"SUCCESS"* ]]; then 
-             # Fallback: If ping works, SA exists even if swanctl implies otherwise (rekeying/race condition)
-             sas_status="${GREEN}ESTABLISHED*${NC}"
-        else
-            sas_status="${RED}NO-SA${NC}"
-        fi
-        
-        # 3. Ping Test
+        # 3. Ping Test FIRST (Source of Truth)
         target_ip=$(grep 'TARGET=' "/usr/local/bin/ipsec-keepalive-${id}.sh" 2>/dev/null | cut -d'"' -f2)
         if [[ -n "$target_ip" ]]; then
             if ping -c 1 -W 1 "$target_ip" >/dev/null 2>&1; then
                 ping_status="${GREEN}SUCCESS ($target_ip)${NC}"
-                # If ping is success, force SA status visual fix
-                if [[ "$sas_status" == *"NO-SA"* ]]; then sas_status="${GREEN}ESTABLISHED*${NC}"; fi
+                is_connected=true
             else
                 ping_status="${RED}FAILED ($target_ip)${NC}"
+                is_connected=false
             fi
         else
             ping_status="${YELLOW}Unknown Target${NC}"
+            is_connected=false
+        fi
+
+        # 2. IPsec SA Status (Logic: If Ping works, SA IS UP regardless of swanctl api error)
+        if echo "$swan_out" | grep -q "tun${id}"; then
+            sas_status="${GREEN}ESTABLISHED${NC}"
+        elif [ "$is_connected" = true ]; then
+            sas_status="${GREEN}ESTABLISHED (Flowing)${NC}"
+        else
+            sas_status="${RED}NO-SA${NC}"
         fi
         
-        printf "%-5s %-20s %-20s %-20s\n" "$id" "$svc_status" "$sas_status" "$ping_status"
+        printf "%-5s %-20s %-35s %-20s\n" "$id" "$svc_status" "$sas_status" "$ping_status"
     done
     echo ""
     read -p "Press Enter to return..."

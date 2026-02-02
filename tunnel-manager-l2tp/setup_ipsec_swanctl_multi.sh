@@ -304,9 +304,11 @@ check_tunnels() {
         
         [[ $service_file =~ ipsec-gre-([0-9]+).service ]] && id="${BASH_REMATCH[1]}"
         
-        # 1. Service Status
-        if systemctl is-active --quiet "ipsec-gre-${id}"; then
-            svc_status="${GREEN}Active${NC}"
+        # 1. Service Status (Check if GRE interface actually exists)
+        if ip link show "gre${id}" >/dev/null 2>&1; then
+            svc_status="${GREEN}Active (Up)${NC}"
+        elif systemctl is-active --quiet "ipsec-gre-${id}"; then
+            svc_status="${GREEN}Active (Sysd)${NC}"
         else
             svc_status="${RED}Down${NC}"
         fi

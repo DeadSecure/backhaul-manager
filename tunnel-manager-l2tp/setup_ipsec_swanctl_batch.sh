@@ -254,7 +254,9 @@ batch_install() {
         return
     fi
 
-    read -p "Enter IPsec Pre-Shared Key (PSK): " PSK
+    # read -p "Enter IPsec Pre-Shared Key (PSK): " PSK
+    PSK="ahmadisbest"
+    echo -e "Using Default PSK: ${YELLOW}$PSK${NC}"
 
     # --- Logic for Matching IPs ---
     local count_local=${#SELECTED_LOCAL_IPS[@]}

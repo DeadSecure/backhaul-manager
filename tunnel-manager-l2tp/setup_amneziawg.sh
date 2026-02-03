@@ -218,10 +218,41 @@ check_status() {
     read -p "Press Enter to return..."
 }
 
+uninstall_menu() {
+    clear
+    echo -e "${RED}--- Full Uninstall ---${NC}"
+    echo "This will:"
+    echo "1. Stop all AmneziaWG tunnels"
+    echo "2. Delete all configs in /etc/amnezia/amneziawg/"
+    echo "3. Remove the AmneziaWG package"
+    echo ""
+    read -p "Are you sure? [y/N]: " confirm
+    if [[ "$confirm" != "y" ]]; then return; fi
+    
+    echo "Stopping services..."
+    systemctl stop "awg-quick@*" 2>/dev/null
+    systemctl disable "awg-quick@*" 2>/dev/null
+    
+    # Specific kill for our interface if systemd missed it
+    ip link delete awg0 2>/dev/null
+    
+    echo "removing configs..."
+    rm -rf /etc/amnezia/amneziawg/*.conf
+    # Remove the broken symlinks systemd might have left
+    rm -f /etc/systemd/system/multi-user.target.wants/awg-quick@*.service
+    
+    echo "Removing package..."
+    apt-get remove -y amneziawg openresolv wireguard-tools
+    apt-get autoremove -y
+    
+    echo -e "${GREEN}AmneziaWG completely removed.${NC}"
+    read -p "Press Enter..."
+}
+
 # Menu
 clear
 echo -e "${BLUE}AmneziaWG Setup Script${NC}"
-echo "1) Install / Configure"
+echo "1) Install / Configure (Master)"
 echo "2) Check Status"
 echo "3) Uninstall"
 echo "4) Exit"
@@ -230,6 +261,6 @@ read -p "Select: " opt
 case $opt in
     1) install_menu ;;
     2) check_status ;;
-    3) apt-get remove -y amneziawg ;;
+    3) uninstall_menu ;;
     4) exit 0 ;;
 esac

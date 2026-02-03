@@ -53,106 +53,98 @@ gen_random() {
     shuf -i $1-$2 -n 1
 }
 
-generate_config() {
-    local role=$1
-    local tun_id=$2
-    local local_ip=$3
+generate_client_script() {
+    local peer_priv=$1
+    local local_pub=$2
+    local psk=$3
     local remote_ip=$4
     local listen_port=$5
-    
-    # Generate Keys if not exist
-    local priv_key=$(awg genkey)
-    local pub_key=$(echo "$priv_key" | awg pubkey)
-    local psk=$(awg genpsk)
-    
-    # Amnezia Specific Obfuscation Parameters (The MAGIC)
-    # Allows the tunnel to look like random garbage to DPI
-    local Jc=$(gen_random 3 10)
-    local Jmin=$(gen_random 10 50)
-    local Jmax=$(gen_random 50 100)
-    local S1=$(gen_random 15 150)
-    local S2=$(gen_random 15 150)
-    local H1=$(gen_random 5 20)
-    local H2=$(gen_random 5 20)
-    local H3=$(gen_random 5 20)
-    local H4=$(gen_random 5 20)
-    
-    # Store these shared secrets mainly on one side, but both need to match.
-    # For symmetry, we will ask user to PASTE config from Peer A to Peer B.
-    
-    echo -e "${CYAN}--- GENERATED CONFIG ---${NC}"
-    echo "Please SAVE this block. You need to verify these params match on the other side."
-    echo ""
+    local jc=$6; local jmin=$7; local jmax=$8
+    local s1=$9; local s2=${10}
+    local h1=${11}; local h2=${12}; local h3=${13}; local h4=${14}
+    local client_ip=${15}
+    local server_ip=${16}
+    local interface=${17}
+
+    echo "cat > /etc/amnezia/amneziawg/${interface}.conf <<EOF"
     echo "[Interface]"
-    echo "PrivateKey = $priv_key"
+    echo "PrivateKey = $peer_priv"
     echo "ListenPort = $listen_port"
-    echo "Address = 10.10.${tun_id}.${role}/30"
-    echo "Jc = $Jc"
-    echo "Jmin = $Jmin"
-    echo "Jmax = $Jmax"
-    echo "S1 = $S1"
-    echo "S2 = $S2"
-    echo "H1 = $H1"
-    echo "H2 = $H2"
-    echo "H3 = $H3"
-    echo "H4 = $H4"
+    echo "Address = $client_ip/30"
+    echo "Jc = $jc"
+    echo "Jmin = $jmin"
+    echo "Jmax = $jmax"
+    echo "S1 = $s1"
+    echo "S2 = $s2"
+    echo "H1 = $h1"
+    echo "H2 = $h2"
+    echo "H3 = $h3"
+    echo "H4 = $h4"
     echo ""
     echo "[Peer]"
-    echo "PublicKey = (PUT_REMOTE_PUBKEY_HERE)"
+    echo "PublicKey = $local_pub"
     echo "PresharedKey = $psk"
-    echo "Endpoint = $remote_ip:$listen_port"
     echo "AllowedIPs = 0.0.0.0/0"
-    echo "------------------------------------------------"
+    echo "Endpoint = $remote_ip:$listen_port"
+    echo "PersistentKeepalive = 20"
+    echo "EOF"
+    echo "chmod 600 /etc/amnezia/amneziawg/${interface}.conf"
+    echo "systemctl enable --now awg-quick@${interface}"
+    echo "echo -e \"\033[0;32mClient Configured Successfully!\033[0m\""
 }
 
-# Simplistic approach: Standard WireGuard setup structure but using 'awg' command.
-# Since Amnezia requires matching random parameters on both sides, automated script 
-# usually generates a "Server" config and a "Client" config file output.
-
 install_menu() {
-    echo -e "${BLUE}--- AmneziaWG Tunnel Setup ---${NC}"
-    echo "1) Configure This Node"
-    read -p "Select: " opt
+    clear
+    echo -e "${BLUE}--- AmneziaWG Easy Setup ---${NC}"
+    echo "This script assumes you are running it on the MASTER node (e.g. Kharej)."
+    echo "It will configure this server AND generate a one-time script for the other server."
+    echo ""
     
-    read -p "Enter Tunnel CONFIG NAME (e.g. awg0): " IFACE
+    read -p "Enter Tunnel Name (default: awg0): " IFACE
     if [[ -z "$IFACE" ]]; then IFACE="awg0"; fi
     
-    read -p "Enter Local Port (UDP) [Default 51820]: " PORT
+    # Check if already exists
+    if [ -f "/etc/amnezia/amneziawg/${IFACE}.conf" ]; then
+        echo -e "${RED}Config $IFACE already exists! Aborting.${NC}"
+        read -p "Press Enter..."
+        return
+    fi
+
+    # Detect Local IP
+    local my_ip=$(ip route get 8.8.8.8 | awk '{print $7; exit}')
+    echo -e "Detected Local IP: ${GREEN}$my_ip${NC}"
+    
+    read -p "Enter REMOTE Server IP (The other side): " REMOTE_PEER_IP
+    read -p "Enter Listen Port (default: 51820): " PORT
     if [[ -z "$PORT" ]]; then PORT=51820; fi
     
-    # Logic:
-    # 1. Install dependencies
     install_amnezia
     
-    # 2. Ask if this is the "Initiator" (Config Generator) or "Peer" (Paste Config)
-    echo -e "\nSince Amnezia parameters must match perfectly:"
-    echo "1) Generate New Configuration (Run this on Server 1)"
-    echo "2) Paste Configuration (Run this on Server 2)"
-    read -p "Select Mode: " mode
+    echo "Generating Keys..."
+    # Local Keys (Master)
+    master_priv=$(awg genkey)
+    master_pub=$(echo "$master_priv" | awg pubkey)
     
-    CONFIG_FILE="/etc/amnezia/amneziawg/${IFACE}.conf"
+    # Peer Keys (The other side)
+    peer_priv=$(awg genkey)
+    peer_pub=$(echo "$peer_priv" | awg pubkey)
     
-    if [ "$mode" == "1" ]; then
-        # Generation Logic
-        priv=$(awg genkey)
-        pub=$(echo "$priv" | awg pubkey)
-        psk=$(awg genpsk)
-        
-        # Magic Params
-        Jc=$(gen_random 3 10); Jmin=$(gen_random 50 100); Jmax=$(gen_random 600 1000)
-        S1=$(gen_random 100 200); S2=$(gen_random 100 200)
-        H1=$(gen_random 1000000000 2000000000) 
-        H2=$(gen_random 1000000000 2000000000)
-        H3=$(gen_random 1000000000 2000000000)
-        H4=$(gen_random 1000000000 2000000000)
-        
-        local_ip="10.10.100.1/30"
-        
-        cat > "$CONFIG_FILE" <<EOF
+    psk=$(awg genpsk)
+    
+    # Generate Magic Obfuscation Params
+    Jc=$(gen_random 3 10); Jmin=$(gen_random 50 100); Jmax=$(gen_random 600 1000)
+    S1=$(gen_random 100 200); S2=$(gen_random 100 200)
+    H1=$(gen_random 1000000000 2000000000)
+    H2=$(gen_random 1000000000 2000000000)
+    H3=$(gen_random 1000000000 2000000000)
+    H4=$(gen_random 1000000000 2000000000)
+    
+    # Create Local Config (Master)
+    cat > "/etc/amnezia/amneziawg/${IFACE}.conf" <<EOF
 [Interface]
-PrivateKey = $priv
+PrivateKey = $master_priv
 ListenPort = $PORT
-Address = $local_ip
+Address = 10.10.100.1/30
 Jc = $Jc
 Jmin = $Jmin
 Jmax = $Jmax
@@ -164,47 +156,38 @@ H3 = $H3
 H4 = $H4
 
 [Peer]
-PublicKey = REPLACE_WITH_REMOTE_PUBKEY
+PublicKey = $peer_pub
 PresharedKey = $psk
 AllowedIPs = 10.10.100.2/32
-Endpoint = REPLACE_WITH_REMOTE_IP:$PORT
+# We don't necessarily know if the other side has a public IP/Port reachable, 
+# but usually for a tunnel we assume both are servers.
+Endpoint = $REMOTE_PEER_IP:$PORT
+PersistentKeepalive = 20
 EOF
-        chmod 600 "$CONFIG_FILE"
-        
-        echo -e "\n${GREEN}Config Generated at $CONFIG_FILE${NC}"
-        echo -e "${YELLOW}IMPORTANT: You must use these EXACT parameters on the other server:${NC}"
-        echo "-------------------------------------------------"
-        echo "Jc = $Jc"
-        echo "Jmin = $Jmin"
-        echo "Jmax = $Jmax"
-        echo "S1 = $S1"
-        echo "S2 = $S2"
-        echo "H1 = $H1"
-        echo "H2 = $H2"
-        echo "H3 = $H3"
-        echo "H4 = $H4"
-        echo "PresharedKey = $psk"
-        echo "PublicKey (Mine) = $pub"
-        echo "-------------------------------------------------"
-        echo "Update the [Peer] section in $CONFIG_FILE with the Remote Public Key and IP later."
-        echo -e "${RED}Service NOT started yet. You must edit the file and fill placeholders first!${NC}"
-        
-    else
-        # Paste Logic
-        echo -e "${YELLOW}Paste the content for $CONFIG_FILE (Ctrl+D to save):${NC}"
-        cat > "$CONFIG_FILE"
-        chmod 600 "$CONFIG_FILE"
-        
-        # In paste mode, if the user pasted a complete config, we CAN start it.
-        read -p "Did you paste a COMPLETE config (with IPs filled)? [y/n]: " start_now
-        if [[ "$start_now" == "y" ]]; then
-             systemctl enable --now "awg-quick@${IFACE}"
-             echo -e "${GREEN}Service awg-quick@${IFACE} started.${NC}"
-        else
-             systemctl enable "awg-quick@${IFACE}"
-             echo -e "${YELLOW}Service enabled but NOT started. Edit config then run: systemctl start awg-quick@${IFACE}${NC}"
-        fi
-    fi
+    chmod 600 "/etc/amnezia/amneziawg/${IFACE}.conf"
+    
+    # Enable Local Service
+    systemctl enable --now "awg-quick@${IFACE}"
+    
+    echo -e "${GREEN}✅ Local Configuration (Master) Done!${NC}"
+    echo "IP: 10.10.100.1"
+    echo ""
+    echo -e "${YELLOW}====================================================${NC}"
+    echo -e "${YELLOW}   COPY THIS CODE AND RUN IN THE OTHER SERVER terminal   ${NC}"
+    echo -e "${YELLOW}====================================================${NC}"
+    echo ""
+    
+    # Generate Client Script
+    # 10.10.100.2 is peer IP, my_ip is endpoint IP
+    generate_client_script "$peer_priv" "$master_pub" "$psk" "$my_ip" "$PORT" \
+                           "$Jc" "$Jmin" "$Jmax" "$S1" "$S2" \
+                           "$H1" "$H2" "$H3" "$H4" \
+                           "10.10.100.2" "10.10.100.1" "$IFACE"
+                           
+    echo ""
+    echo -e "${YELLOW}====================================================${NC}"
+    echo "Just copy the lines between the lines above and paste in the other VPS."
+    read -p "Press Enter to return..."
 }
 
 check_status() {

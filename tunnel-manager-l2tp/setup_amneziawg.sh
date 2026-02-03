@@ -87,7 +87,9 @@ generate_client_script() {
     echo "[Peer]"
     echo "PublicKey = $local_pub"
     echo "PresharedKey = $psk"
-    echo "AllowedIPs = 0.0.0.0/0"
+    # CRITICAL FIX: Do NOT use 0.0.0.0/0 or it hijacks the default route and kills SSH!
+    # Only route traffic meant for the VPN tunnel IPs.
+    echo "AllowedIPs = $server_ip/32"
     echo "Endpoint = $remote_ip:$listen_port"
     echo "PersistentKeepalive = 20"
     echo "EOF"

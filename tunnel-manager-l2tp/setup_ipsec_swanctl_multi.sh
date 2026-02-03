@@ -261,10 +261,51 @@ install_menu() {
 }
 
 uninstall_menu() {
+    echo "1) Uninstall Specific Tunnel ID"
+    echo "2) Nuke ALL Tunnels (Force Clean)"
+    read -p "Select: " u_opt
+    
+    if [ "$u_opt" == "2" ]; then
+        echo -e "${RED}WARNING: This will delete ALL 'gre' interfaces and 'ipsec-gre' services.${NC}"
+        read -p "Are you sure? [y/N]: " confirm
+        if [[ "$confirm" != "y" ]]; then return; fi
+        
+        # Stop Services
+        systemctl stop "ipsec-gre-*" 2>/dev/null
+        systemctl disable "ipsec-gre-*" 2>/dev/null
+        systemctl stop "ipsec-keepalive-*" 2>/dev/null
+        systemctl disable "ipsec-keepalive-*" 2>/dev/null
+        
+        # Remove Files
+        rm -f /etc/systemd/system/ipsec-gre-*.service
+        rm -f /etc/systemd/system/ipsec-keepalive-*.service
+        rm -f /usr/local/bin/ipsec-gre-up-*.sh
+        rm -f /usr/local/bin/ipsec-keepalive-*.sh
+        rm -f "$CONF_D_DIR/tun*.conf"
+        
+        # Force Delete Interfaces
+        echo "Deleting interfaces..."
+        for dev in $(ip link show | cut -d: -f2 | grep -o 'gre[0-9]\+'); do
+            echo "Deleting $dev..."
+            ip link delete "$dev" 2>/dev/null
+            ip tunnel del "$dev" 2>/dev/null
+        done
+        
+        swanctl --terminate --ike "*" 2>/dev/null
+        swanctl --load-all
+        systemctl daemon-reload
+        echo -e "${GREEN}All Tunnels Nuked.${NC}"
+        return
+    fi
+
     read -p "Enter Tunnel ID to uninstall: " TUN_ID
     if [[ -n "$TUN_ID" ]]; then
         systemctl stop "ipsec-keepalive-${TUN_ID}" "ipsec-gre-${TUN_ID}"
         systemctl disable "ipsec-keepalive-${TUN_ID}" "ipsec-gre-${TUN_ID}"
+        
+        # FORCE DELETE LINK
+        ip link delete "gre${TUN_ID}" 2>/dev/null
+        ip tunnel del "gre${TUN_ID}" 2>/dev/null
         
         rm -f "/etc/systemd/system/ipsec-keepalive-${TUN_ID}.service"
         rm -f "/etc/systemd/system/ipsec-gre-${TUN_ID}.service"

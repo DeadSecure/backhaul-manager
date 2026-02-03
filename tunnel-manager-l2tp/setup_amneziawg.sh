@@ -51,6 +51,51 @@ install_amnezia() {
 
 # ... (rest of functions) ...
 
+# Function to generate random values for obfuscation
+gen_random() {
+    shuf -i $1-$2 -n 1
+}
+
+generate_client_script() {
+    local peer_priv=$1
+    local local_pub=$2
+    local psk=$3
+    local remote_ip=$4
+    local listen_port=$5
+    local jc=$6; local jmin=$7; local jmax=$8
+    local s1=$9; local s2=${10}
+    local h1=${11}; local h2=${12}; local h3=${13}; local h4=${14}
+    local client_ip=${15}
+    local server_ip=${16}
+    local interface=${17}
+
+    echo "cat > /etc/amnezia/amneziawg/${interface}.conf <<EOF"
+    echo "[Interface]"
+    echo "PrivateKey = $peer_priv"
+    echo "ListenPort = $listen_port"
+    echo "Address = $client_ip/30"
+    echo "Jc = $jc"
+    echo "Jmin = $jmin"
+    echo "Jmax = $jmax"
+    echo "S1 = $s1"
+    echo "S2 = $s2"
+    echo "H1 = $h1"
+    echo "H2 = $h2"
+    echo "H3 = $h3"
+    echo "H4 = $h4"
+    echo ""
+    echo "[Peer]"
+    echo "PublicKey = $local_pub"
+    echo "PresharedKey = $psk"
+    echo "AllowedIPs = 0.0.0.0/0"
+    echo "Endpoint = $remote_ip:$listen_port"
+    echo "PersistentKeepalive = 20"
+    echo "EOF"
+    echo "chmod 600 /etc/amnezia/amneziawg/${interface}.conf"
+    echo "systemctl enable --now awg-quick@${interface}"
+    echo "echo -e \"\033[0;32mClient Configured Successfully!\033[0m\""
+}
+
 install_menu() {
     clear
     echo -e "${BLUE}--- AmneziaWG Easy Setup ---${NC}"
@@ -67,6 +112,7 @@ install_menu() {
         read -p "Press Enter..."
         return
     fi
+
 
     # Detect Local IP
     local my_ip=$(ip route get 8.8.8.8 | awk '{print $7; exit}')

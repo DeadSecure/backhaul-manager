@@ -191,19 +191,66 @@ EOF
 }
 
 check_status() {
-    echo -e "${BLUE}--- AmneziaWG Status ---${NC}"
-    if command -v awg &> /dev/null; then
-        local show_out=$(awg show)
-        if [[ -n "$show_out" ]]; then
-            echo "$show_out"
-        else
-            echo -e "${RED}No active tunnels found.${NC}"
-            echo "Checking systemd status for awg-quick@awg0:"
-            systemctl status awg-quick@awg0 --no-pager | head -n 10
-        fi
-    else
-        echo "AmneziaWG tool (awg) not found."
+    clear
+    echo -e "${BLUE}--- AmneziaWG Smart Diagnostics ---${NC}"
+    
+    # 1. Check Service State
+    if ! systemctl is-active --quiet "awg-quick@awg0"; then
+        echo -e "${RED}[CRITICAL] Service awg-quick@awg0 is STOPPED!${NC}"
+        echo "Trying to start..."
+        systemctl start awg-quick@awg0
+        sleep 2
     fi
+
+    # 2. Check Interface
+    if ! ip link show awg0 >/dev/null 2>&1; then
+        echo -e "${RED}[ERROR] Interface 'awg0' not found.${NC}"
+        echo "Check logs: journalctl -xeu awg-quick@awg0"
+        read -p "Press Enter..."
+        return
+    fi
+    
+    # 3. Analyze Handshake
+    local output=$(awg show awg0)
+    echo "$output"
+    echo "------------------------------------------------"
+    
+    if echo "$output" | grep -q "latest handshake"; then
+        local last_hs=$(echo "$output" | grep "latest handshake" | awk '{print $3, $4}')
+        echo -e "${GREEN}✅ Handshake Successful!${NC} (Last: $last_hs)"
+        
+        # 4. Ping Test
+        # Determine peer IP based on my IP
+        local my_vpn_ip=$(ip -4 addr show awg0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+        local peer_ip=""
+        
+        if [[ "$my_vpn_ip" == *"10.10.100.1"* ]]; then
+            peer_ip="10.10.100.2"
+        elif [[ "$my_vpn_ip" == *"10.10.100.2"* ]]; then
+            peer_ip="10.10.100.1"
+        fi
+        
+        if [[ -n "$peer_ip" ]]; then
+            echo -e "\n${CYAN}--- Pinging Peer ($peer_ip) ---${NC}"
+            if ping -c 3 -W 1 "$peer_ip"; then
+                echo -e "\n${GREEN}🚀 CONNECTION STABLE! 🚀${NC}"
+            else
+                echo -e "\n${RED}⚠️ Handshake OK but Ping FAILED.${NC}"
+                echo "Possibilities:"
+                echo "1. Firewall on Peer is dropping ICMP."
+                echo "2. Routing table issue."
+            fi
+        fi
+        
+    else
+        echo -e "${RED}❌ NO HANDSHAKE DETECTED!${NC}"
+        echo -e "${YELLOW}Troubleshooting Tips:${NC}"
+        echo "1. Wait 1-2 minutes. Amnezia handshake is sometimes slow."
+        echo "2. Check UDP Port blocking. Try changing port in config."
+        echo "3. Ensure 'Remote Server IP' was correct during setup."
+        echo "4. If in Iran, UDP might be throttled. Try different Garbage params (Jc, S1...)."
+    fi
+    
     echo ""
     read -p "Press Enter to return..."
 }

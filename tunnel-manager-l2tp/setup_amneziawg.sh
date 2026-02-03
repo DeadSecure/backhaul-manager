@@ -220,11 +220,11 @@ check_status() {
 
 uninstall_menu() {
     clear
-    echo -e "${RED}--- Full Uninstall ---${NC}"
+    echo -e "${RED}--- Remove Tunnels (Keep Package) ---${NC}"
     echo "This will:"
     echo "1. Stop all AmneziaWG tunnels"
     echo "2. Delete all configs in /etc/amnezia/amneziawg/"
-    echo "3. Remove the AmneziaWG package"
+    echo "3. Keep AmneziaWG installed (so you can reinstall quickly)"
     echo ""
     read -p "Are you sure? [y/N]: " confirm
     if [[ "$confirm" != "y" ]]; then return; fi
@@ -236,16 +236,16 @@ uninstall_menu() {
     # Specific kill for our interface if systemd missed it
     ip link delete awg0 2>/dev/null
     
-    echo "removing configs..."
+    echo "Removing configs..."
     rm -rf /etc/amnezia/amneziawg/*.conf
     # Remove the broken symlinks systemd might have left
     rm -f /etc/systemd/system/multi-user.target.wants/awg-quick@*.service
     
-    echo "Removing package..."
-    apt-get remove -y amneziawg openresolv wireguard-tools
-    apt-get autoremove -y
+    # Package removal commented out per user request
+    # apt-get remove -y amneziawg openresolv wireguard-tools
+    # apt-get autoremove -y
     
-    echo -e "${GREEN}AmneziaWG completely removed.${NC}"
+    echo -e "${GREEN}Tunnels removed. AmneziaWG package kept.${NC}"
     read -p "Press Enter..."
 }
 

@@ -427,21 +427,51 @@ check_tunnels() {
     read -p "Press Enter to return..."
 }
 
+nuke_all_silent() {
+    log "Silent Nuke initiated..."
+    echo -e "${YELLOW}Force Cleaning ALL Tunnels...${NC}"
+
+    systemctl stop "ipsec-gre-*" 2>/dev/null
+    systemctl disable "ipsec-gre-*" 2>/dev/null
+    systemctl stop "ipsec-keepalive-*" 2>/dev/null
+    systemctl disable "ipsec-keepalive-*" 2>/dev/null
+
+    rm -f /etc/systemd/system/ipsec-gre-*.service
+    rm -f /etc/systemd/system/ipsec-keepalive-*.service
+    rm -f /usr/local/bin/ipsec-gre-up-*.sh
+    rm -f /usr/local/bin/ipsec-keepalive-*.sh
+    rm -f "$CONF_D_DIR/tun*.conf"
+
+    for i in {1..99}; do
+        ip link delete "gre$i" 2>/dev/null
+        ip tunnel del "gre$i" 2>/dev/null
+    done
+    
+    swanctl --terminate --ike "*" 2>/dev/null
+    swanctl --load-all
+    systemctl daemon-reload
+    
+    log "Silent Nuke completed."
+    echo -e "${GREEN}All Tunnels Deleted.${NC}"
+}
+
 # Main Loop
 while true; do
     clear
     echo -e "${GREEN}   Swanctl IPsec BATCH Manager   ${NC}"
     echo "1) Batch Install Tunnels"
-    echo "2) Uninstall Tunnel"
+    echo "2) Uninstall Tunnel (Menu)"
     echo "3) Check Connection Status"
-    echo "4) Exit"
+    echo "9) Delete ALL (Silent/Clean)"
+    echo "0) Exit"
     read -p "Select: " opt
 
     case $opt in
         1) batch_install ;;
         2) uninstall_menu ;;
         3) check_tunnels ;;
-        4) exit 0 ;;
+        9) nuke_all_silent ;;
+        0) exit 0 ;;
         *) echo "Invalid option" ; sleep 1 ;;
     esac
 done

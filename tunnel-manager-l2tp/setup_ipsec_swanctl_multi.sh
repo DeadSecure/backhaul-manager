@@ -285,16 +285,32 @@ uninstall_menu() {
         
         # Force Delete Interfaces
         echo "Deleting interfaces..."
-        for dev in $(ip link show | cut -d: -f2 | grep -o 'gre[0-9]\+'); do
+        # Try deleting by name explicitly
+        for i in {1..20}; do
+            ip link delete "gre$i" 2>/dev/null
+            ip tunnel del "gre$i" 2>/dev/null
+        done
+        
+        # General cleanup
+        for dev in $(ip link show | grep -o 'gre[0-9]\+'); do
             echo "Deleting $dev..."
+            ip link set "$dev" down
             ip link delete "$dev" 2>/dev/null
-            ip tunnel del "$dev" 2>/dev/null
         done
         
         swanctl --terminate --ike "*" 2>/dev/null
         swanctl --load-all
         systemctl daemon-reload
-        echo -e "${GREEN}All Tunnels Nuked.${NC}"
+        
+        # Try to unload kernel modules (The Ultimate Fix)
+        echo "Unloading GRE kernel modules..."
+        modprobe -r ip_gre 2>/dev/null
+        modprobe -r gre 2>/dev/null
+        modprobe -r ip_tunnel 2>/dev/null
+        
+        echo -e "${GREEN}All Tunnels Nuked (Modules Unloaded).${NC}"
+        # Re-load modules for fresh start
+        modprobe ip_gre 2>/dev/null
         return
     fi
 

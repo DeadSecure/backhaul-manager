@@ -282,7 +282,52 @@ install_tunnel() {
     echo -e "   Inner IP: $(ip addr show gre6_${TUN_ID} | grep inet | awk '{print $2}')"
 }
 
-uninstall_tunnel() {
+uninstall_menu() {
+    echo "1) Uninstall Specific Tunnel ID"
+    echo "2) Nuke ALL Tunnels (Force Clean)"
+    read -p "Select: " u_opt
+
+    if [ "$u_opt" == "2" ]; then
+        echo -e "${RED}WARNING: This will delete ALL 'sit' & 'gre6' interfaces and services created by this script.${NC}"
+        read -p "Are you sure? [y/N]: " confirm
+        if [[ "$confirm" != "y" ]]; then return; fi
+
+        log "Nuking all tunnels..."
+
+        # Stop Services
+        systemctl stop "tunnel6-*" 2>/dev/null
+        systemctl disable "tunnel6-*" 2>/dev/null
+        systemctl stop "keepalive6-*" 2>/dev/null
+        systemctl disable "keepalive6-*" 2>/dev/null
+
+        # Remove Files
+        rm -f /etc/systemd/system/tunnel6-*.service
+        rm -f /etc/systemd/system/keepalive6-*.service
+        rm -f /usr/local/bin/sit-up-*.sh
+        rm -f /usr/local/bin/gre6-up-*.sh
+        rm -f /usr/local/bin/keepalive6-*.sh
+
+        # Delete Interfaces
+        # GRE6
+        for dev in $(ip link show | grep -o 'gre6_[0-9]\+'); do
+            echo "Deleting $dev..."
+            ip link set "$dev" down 2>/dev/null
+            ip -6 tunnel del "$dev" 2>/dev/null
+        done
+        
+        # SIT (Excluding sit0)
+        for dev in $(ip link show | grep -o 'sit[0-9]\+'); do
+            if [[ "$dev" == "sit0" ]]; then continue; fi
+            echo "Deleting $dev..."
+            ip link set "$dev" down 2>/dev/null
+            ip tunnel del "$dev" 2>/dev/null
+        done
+
+        systemctl daemon-reload
+        echo -e "${GREEN}All 6to4 Tunnels Nuked.${NC}"
+        return
+    fi
+
     read -p "Enter Tunnel ID to uninstall: " TUN_ID
     if [[ -n "$TUN_ID" ]]; then
         systemctl stop "keepalive6-${TUN_ID}" "tunnel6-${TUN_ID}" 2>/dev/null
@@ -302,12 +347,12 @@ echo -e "${GREEN}====================================${NC}"
 echo -e "${GREEN}   6to4 + GRE6 Tunnel Manager       ${NC}"
 echo -e "${GREEN}====================================${NC}"
 echo "1) Install Tunnel"
-echo "2) Uninstall Tunnel"
+echo "2) Uninstall Menu"
 echo "3) Exit"
 read -p "Select: " opt
 
 case $opt in
     1) install_tunnel ;;
-    2) uninstall_tunnel ;;
+    2) uninstall_menu ;;
     *) exit 0 ;;
 esac

@@ -71,6 +71,9 @@ configure_firewall() {
     # Allow Protocol 4 (IPIP) instead of 47 (GRE)
     iptables -I INPUT -p 4 -j ACCEPT 2>/dev/null || true
     iptables -I INPUT -p esp -j ACCEPT 2>/dev/null || true
+    
+    # MSS Clamping (Critical for Tunnels)
+    iptables -t mangle -I POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 }
 
 setup_swanctl_config() {
@@ -78,6 +81,9 @@ setup_swanctl_config() {
     local local_ip=$2
     local remote_ip=$3
     local psk=$4
+    
+    # Enable IP Forwarding
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null
     
     # Generate Unique Config File for this Tunnel
     cat > "$CONF_D_DIR/tun${id}.conf" <<EOF
@@ -134,7 +140,7 @@ setup_ipip_interface() {
 ip tunnel del ipip${id} 2>/dev/null || true
 # Mode is ipip
 ip tunnel add ipip${id} mode ipip remote $remote_ip local $local_ip ttl 255
-ip link set ipip${id} mtu 1400
+ip link set ipip${id} mtu 1360
 ip link set ipip${id} up
 ip addr add $tun_local/30 dev ipip${id}
 EOF

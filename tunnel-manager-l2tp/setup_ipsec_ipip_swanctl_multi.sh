@@ -140,9 +140,16 @@ setup_ipip_interface() {
 ip tunnel del ipip${id} 2>/dev/null || true
 # Mode is ipip
 ip tunnel add ipip${id} mode ipip remote $remote_ip local $local_ip ttl 255
-ip link set ipip${id} mtu 1360
+# User requested High MTU. 1400 is standard safe for IPsec Transport.
+ip link set ipip${id} mtu 1400
 ip link set ipip${id} up
 ip addr add $tun_local/30 dev ipip${id}
+
+# CRITICAL: Disable Reverse Path Filtering for this interface
+# Often causes packet drops on IPIP/GRE tunnels
+sysctl -w net.ipv4.conf.ipip${id}.rp_filter=0 >/dev/null 2>&1
+sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1
+
 EOF
     chmod +x "/usr/local/bin/ipsec-ipip-up-${id}.sh"
 

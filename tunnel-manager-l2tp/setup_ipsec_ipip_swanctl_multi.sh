@@ -262,10 +262,58 @@ install_menu() {
 }
 
 uninstall_menu() {
+    echo "1) Uninstall Specific Tunnel ID"
+    echo "2) Nuke ALL Tunnels (Force Clean)"
+    read -p "Select: " u_opt
+    
+    if [ "$u_opt" == "2" ]; then
+        echo -e "${RED}WARNING: This will delete ALL 'ipip' interfaces and 'ipsec-ipip' services.${NC}"
+        read -p "Are you sure? [y/N]: " confirm
+        if [[ "$confirm" != "y" ]]; then return; fi
+        
+        # Stop Services
+        systemctl stop "ipsec-ipip-*" 2>/dev/null
+        systemctl disable "ipsec-ipip-*" 2>/dev/null
+        systemctl stop "ipsec-keepalive-*" 2>/dev/null
+        systemctl disable "ipsec-keepalive-*" 2>/dev/null
+        
+        # Remove Files
+        rm -f /etc/systemd/system/ipsec-ipip-*.service
+        rm -f /etc/systemd/system/ipsec-keepalive-*.service
+        rm -f /usr/local/bin/ipsec-ipip-up-*.sh
+        rm -f /usr/local/bin/ipsec-keepalive-*.sh
+        rm -f "$CONF_D_DIR/tun*.conf"
+        
+        # Force Delete Interfaces
+        echo "Deleting interfaces..."
+        for i in {1..20}; do
+            ip link delete "ipip$i" 2>/dev/null
+            ip tunnel del "ipip$i" 2>/dev/null
+        done
+        
+        swanctl --terminate --ike "*" 2>/dev/null
+        swanctl --load-all
+        systemctl daemon-reload
+        
+        # Unload Kernel Modules (Ultimate Fix for IPIP too)
+        echo "Unloading IPIP kernel modules..."
+        modprobe -r ipip 2>/dev/null
+        modprobe -r ip_tunnel 2>/dev/null
+        modprobe -r tunnel4 2>/dev/null
+        
+        echo -e "${GREEN}All IPIP Tunnels Nuked.${NC}"
+        modprobe ipip 2>/dev/null
+        return
+    fi
+
     read -p "Enter Tunnel ID to uninstall: " TUN_ID
     if [[ -n "$TUN_ID" ]]; then
         systemctl stop "ipsec-keepalive-${TUN_ID}" "ipsec-ipip-${TUN_ID}"
         systemctl disable "ipsec-keepalive-${TUN_ID}" "ipsec-ipip-${TUN_ID}"
+        
+        # Force delete specific link
+        ip link delete "ipip${TUN_ID}" 2>/dev/null
+        ip tunnel del "ipip${TUN_ID}" 2>/dev/null
         
         rm -f "/etc/systemd/system/ipsec-keepalive-${TUN_ID}.service"
         rm -f "/etc/systemd/system/ipsec-ipip-${TUN_ID}.service"

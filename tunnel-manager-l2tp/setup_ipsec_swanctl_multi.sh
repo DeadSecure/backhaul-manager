@@ -241,8 +241,8 @@ install_menu() {
     read -p "Enter Remote Server Public IP: " REMOTE_IP
     read -p "Enter IPsec Pre-Shared Key (PSK): " PSK
     
-    local tun_local="172.16.${TUN_ID}.1"
-    local tun_remote="172.16.${TUN_ID}.2"
+    local tun_local="10.10.${TUN_ID}.1"
+    local tun_remote="10.10.${TUN_ID}.2"
     
     if [ "$role_opt" == "2" ]; then
         local temp=$tun_local

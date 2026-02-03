@@ -187,21 +187,42 @@ EOF
         echo "PublicKey (Mine) = $pub"
         echo "-------------------------------------------------"
         echo "Update the [Peer] section in $CONFIG_FILE with the Remote Public Key and IP later."
+        echo -e "${RED}Service NOT started yet. You must edit the file and fill placeholders first!${NC}"
         
     else
         # Paste Logic
         echo -e "${YELLOW}Paste the content for $CONFIG_FILE (Ctrl+D to save):${NC}"
         cat > "$CONFIG_FILE"
         chmod 600 "$CONFIG_FILE"
+        
+        # In paste mode, if the user pasted a complete config, we CAN start it.
+        read -p "Did you paste a COMPLETE config (with IPs filled)? [y/n]: " start_now
+        if [[ "$start_now" == "y" ]]; then
+             systemctl enable --now "awg-quick@${IFACE}"
+             echo -e "${GREEN}Service awg-quick@${IFACE} started.${NC}"
+        else
+             systemctl enable "awg-quick@${IFACE}"
+             echo -e "${YELLOW}Service enabled but NOT started. Edit config then run: systemctl start awg-quick@${IFACE}${NC}"
+        fi
     fi
-    
-    # Enable Service
-    systemctl enable --now "awg-quick@${IFACE}"
-    echo -e "${GREEN}Service awg-quick@${IFACE} started.${NC}"
 }
 
 check_status() {
-    awg show
+    echo -e "${BLUE}--- AmneziaWG Status ---${NC}"
+    if command -v awg &> /dev/null; then
+        local show_out=$(awg show)
+        if [[ -n "$show_out" ]]; then
+            echo "$show_out"
+        else
+            echo -e "${RED}No active tunnels found.${NC}"
+            echo "Checking systemd status for awg-quick@awg0:"
+            systemctl status awg-quick@awg0 --no-pager | head -n 10
+        fi
+    else
+        echo "AmneziaWG tool (awg) not found."
+    fi
+    echo ""
+    read -p "Press Enter to return..."
 }
 
 # Menu

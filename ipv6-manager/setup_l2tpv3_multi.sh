@@ -317,6 +317,51 @@ batch_install() {
     read -p "Press Enter to return..."
 }
 
+check_tunnels() {
+    echo -e "${BLUE}--- Tunnel Status Check ---${NC}"
+    printf "%-5s %-20s %-15s %-20s\n" "ID" "Interface" "Target IP" "Status"
+    echo "------------------------------------------------------------------"
+    
+    # Find all tunnel services
+    for service_file in /etc/systemd/system/tunnel-l2tp-*.service; do
+        if [ ! -f "$service_file" ]; then continue; fi
+        # Extract ID
+        [[ $service_file =~ tunnel-l2tp-([0-9]+).service ]] && id="${BASH_REMATCH[1]}"
+        
+        if_name="l2tpeth${id}"
+        
+        # Get Target IP from keepalive script
+        ka_script="/usr/local/bin/keepalive-l2tp-${id}.sh"
+        if [ -f "$ka_script" ]; then
+            target_ip=$(grep 'TARGET=' "$ka_script" | head -1 | cut -d'"' -f2)
+        else
+            target_ip="Unknown"
+        fi
+        
+        # Check Interface Status
+        if ip link show "$if_name" >/dev/null 2>&1; then
+            if_status="${GREEN}UP${NC}"
+            # Check Ping
+            if [[ "$target_ip" != "Unknown" ]]; then
+                if ping -c 1 -W 1 "$target_ip" >/dev/null 2>&1; then
+                    ping_status="${GREEN}Reachable${NC}"
+                else
+                    ping_status="${RED}Unreachable${NC}"
+                fi
+            else
+                 ping_status="${YELLOW}No Target${NC}"
+            fi
+        else
+            if_status="${RED}DOWN${NC}"
+            ping_status="-"
+        fi
+        
+        printf "%-5s %-30b %-15s %-20b\n" "$id" "${if_name} ($if_status)" "$target_ip" "$ping_status"
+    done
+    echo ""
+    read -p "Press Enter to return..."
+}
+
 uninstall_menu() {
     echo "1) Uninstall Specific Tunnel ID"
     echo "2) Nuke ALL L2TPv3 Tunnels"
@@ -371,13 +416,15 @@ echo -e "${GREEN}   L2TPv3 Multi-Tunnel (UDP)        ${NC}"
 echo -e "${GREEN}====================================${NC}"
 echo "1) Single Install"
 echo "2) Batch Install"
-echo "3) Uninstall Menu"
-echo "4) Exit"
+echo "3) Check Connection"
+echo "4) Uninstall Menu"
+echo "5) Exit"
 read -p "Select: " opt
 
 case $opt in
     1) install_tunnel ;;
     2) batch_install ;;
-    3) uninstall_menu ;;
+    3) check_tunnels ;;
+    4) uninstall_menu ;;
     *) exit 0 ;;
 esac

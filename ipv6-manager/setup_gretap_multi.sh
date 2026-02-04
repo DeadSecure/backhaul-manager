@@ -394,6 +394,102 @@ batch_install() {
     read -p "Press Enter to return..."
 }
 
+check_tunnels() {
+    echo -e "${BLUE}--- Tunnel Status Check ---${NC}"
+    printf "%-5s %-20s %-15s %-20s\n" "ID" "Interface" "Target IP" "Status"
+    echo "------------------------------------------------------------------"
+    
+    # Find all tunnel services
+    for service_file in /etc/systemd/system/tunnel-tap-*.service; do
+        if [ ! -f "$service_file" ]; then continue; fi
+        # Extract ID
+        [[ $service_file =~ tunnel-tap-([0-9]+).service ]] && id="${BASH_REMATCH[1]}"
+        
+        if_name="gt4_${id}"
+        
+        # Get Target IP from keepalive script
+        ka_script="/usr/local/bin/keepalive-tap-${id}.sh"
+        if [ -f "$ka_script" ]; then
+            target_ip=$(grep 'TARGET=' "$ka_script" | head -1 | cut -d'"' -f2)
+        else
+            target_ip="Unknown"
+        fi
+        
+        # Check Interface Status
+        if ip link show "$if_name" >/dev/null 2>&1; then
+            if_status="${GREEN}UP${NC}"
+            # Check Ping
+            if [[ "$target_ip" != "Unknown" ]]; then
+                if ping -c 1 -W 1 "$target_ip" >/dev/null 2>&1; then
+                    ping_status="${GREEN}Reachable${NC}"
+                else
+                    ping_status="${RED}Unreachable${NC}"
+                fi
+            else
+                 ping_status="${YELLOW}No Target${NC}"
+            fi
+        else
+            if_status="${RED}DOWN${NC}"
+            ping_status="-"
+        fi
+        
+        printf "%-5s %-30b %-15s %-20b\n" "$id" "${if_name} ($if_status)" "$target_ip" "$ping_status"
+    done
+    echo ""
+    read -p "Press Enter to return..."
+}
+
+uninstall_menu() {
+    echo "1) Uninstall Specific Tunnel ID"
+    echo "2) Nuke ALL GREtap Tunnels"
+    read -p "Select: " u_opt
+    
+    if [ "$u_opt" == "2" ]; then
+        echo -e "${RED}WARNING: This will delete ALL 'gt4_*' interfaces and related services.${NC}"
+        read -p "Are you sure? [y/N]: " confirm
+        if [[ "$confirm" != "y" ]]; then return; fi
+        
+        log "Nuking all GREtap tunnels..."
+        
+        # Stop & Disable Services
+        systemctl stop "tunnel-tap-*" 2>/dev/null
+        systemctl disable "tunnel-tap-*" 2>/dev/null
+        systemctl stop "keepalive-tap-*" 2>/dev/null
+        systemctl disable "keepalive-tap-*" 2>/dev/null
+        
+        # Remove Files
+        rm -f /etc/systemd/system/tunnel-tap-*.service
+        rm -f /etc/systemd/system/keepalive-tap-*.service
+        rm -f /usr/local/bin/gretap-up-*.sh
+        rm -f /usr/local/bin/keepalive-tap-*.sh
+        
+        # Delete Interfaces
+        for dev in $(ip link show | grep -o 'gt4_[0-9]\+'); do
+            echo "Deleting $dev..."
+            ip link set "$dev" down 2>/dev/null
+            ip link del "$dev" 2>/dev/null
+        done
+        
+        systemctl daemon-reload
+        echo -e "${GREEN}All GREtap Tunnels Removed.${NC}"
+        return
+    fi
+    
+    read -p "Enter Tunnel ID to uninstall: " TUN_ID
+    if [[ -n "$TUN_ID" ]]; then
+        systemctl stop "keepalive-tap-${TUN_ID}" "tunnel-tap-${TUN_ID}" 2>/dev/null
+        systemctl disable "keepalive-tap-${TUN_ID}" "tunnel-tap-${TUN_ID}" 2>/dev/null
+        rm -f "/etc/systemd/system/keepalive-tap-${TUN_ID}.service" "/etc/systemd/system/tunnel-tap-${TUN_ID}.service"
+        rm -f "/usr/local/bin/gretap-up-${TUN_ID}.sh" "/usr/local/bin/keepalive-tap-${TUN_ID}.sh"
+        systemctl daemon-reload
+        
+        ip link set "gt4_${TUN_ID}" down 2>/dev/null
+        ip link del "gt4_${TUN_ID}" 2>/dev/null
+        
+        echo -e "${GREEN}Tunnel $TUN_ID Removed.${NC}"
+    fi
+}
+
 # Main Menu
 clear
 echo -e "${GREEN}====================================${NC}"
@@ -401,13 +497,15 @@ echo -e "${GREEN}   GREtap Multi-Tunnel (10.10.x.x)  ${NC}"
 echo -e "${GREEN}====================================${NC}"
 echo "1) Single Install"
 echo "2) Batch Install (Multi)"
-echo "3) Uninstall Menu"
-echo "4) Exit"
+echo "3) Check Connection"
+echo "4) Uninstall Menu"
+echo "5) Exit"
 read -p "Select: " opt
 
 case $opt in
     1) install_tunnel ;;
     2) batch_install ;;
-    3) uninstall_menu ;;
+    3) check_tunnels ;;
+    4) uninstall_menu ;;
     *) exit 0 ;;
 esac

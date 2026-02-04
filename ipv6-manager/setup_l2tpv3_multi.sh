@@ -59,9 +59,9 @@ setup_l2tp_tunnel() {
     local port=$((5000 + id))
     local if_name="l2tpeth${id}"
     
-    # Inner IP Addressing Scheme: 10.10.{ID}.1/30
-    local inner_local="10.10.${id}.1"
-    local inner_remote="10.10.${id}.2"
+    # Inner IP Addressing Scheme: 10.20.{ID}.1/30
+    local inner_local="10.20.${id}.1"
+    local inner_remote="10.20.${id}.2"
     
     if [ "$SERVER_ROLE" == "KHAREJ" ]; then
         local temp=$inner_local
@@ -124,9 +124,9 @@ EOF
 
 setup_keepalive() {
     local id=$1
-    local target_ip="10.10.${id}.2"
+    local target_ip="10.20.${id}.2"
     if [ "$SERVER_ROLE" == "KHAREJ" ]; then
-        target_ip="10.10.${id}.1"
+        target_ip="10.20.${id}.1"
     fi
     
     log "Setting up Keepalive for $target_ip..."

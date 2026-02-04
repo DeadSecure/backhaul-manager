@@ -282,18 +282,132 @@ uninstall_menu() {
     fi
 }
 
+# ==========================================
+# Batch Logic
+# ==========================================
+
+batch_install() {
+    echo -e "${BLUE}--- Batch Install GREtap Tunnels ---${NC}"
+
+    echo "1) IRAN Server (Hub)"
+    echo "2) KHAREJ Server (Spoke)"
+    read -p "Select Role: " role_opt
+    if [ "$role_opt" == "1" ]; then
+        SERVER_ROLE="IRAN"
+    elif [ "$role_opt" == "2" ]; then
+        SERVER_ROLE="KHAREJ"
+    else
+        echo "Invalid Role."
+        return
+    fi
+
+    read -p "Enter Starting Tunnel ID [1-250]: " START_TUN_ID
+    if [[ ! "$START_TUN_ID" =~ ^[0-9]+$ ]]; then START_TUN_ID=1; fi
+
+    # --- Local IP Selection ---
+    echo -e "\n${CYAN}--- Local Source IPs ---${NC}"
+    local available_ips=($(ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1))
+    
+    if [ ${#available_ips[@]} -eq 0 ]; then
+        echo "${RED}No public IPs found!${NC}"
+        AVAILABLE_LOCAL_IPS=($(get_public_ip))
+    else
+        echo "Available Local IPs:"
+        for i in "${!available_ips[@]}"; do
+             echo "$((i+1))) ${available_ips[$i]}"
+        done
+        echo "A) All IPs (in order)"
+        echo "C) Custom Selection (Enter numbers separated by space, e.g. '1 3')"
+        
+        read -p "Select Local IPs option [A/C/Single Number]: " loc_opt
+        
+        SELECTED_LOCAL_IPS=()
+        if [[ "$loc_opt" =~ ^[aA]$ ]]; then
+            SELECTED_LOCAL_IPS=("${available_ips[@]}")
+        elif [[ "$loc_opt" =~ ^[cC]$ ]]; then
+            read -p "Enter IP numbers to use (e.g. '1 2'): " ip_nums
+            for num in $ip_nums; do
+                if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -ge 1 ] && [ "$num" -le "${#available_ips[@]}" ]; then
+                    SELECTED_LOCAL_IPS+=("${available_ips[$((num-1))]}")
+                fi
+            done
+        elif [[ "$loc_opt" =~ ^[0-9]+$ ]] && [ "$loc_opt" -ge 1 ] && [ "$loc_opt" -le "${#available_ips[@]}" ]; then
+             SELECTED_LOCAL_IPS=("${available_ips[$((loc_opt-1))]}")
+        else
+             echo "Invalid selection, defaulting to primary IP."
+             SELECTED_LOCAL_IPS=($(get_public_ip))
+        fi
+    fi
+    echo -e "Selected Local IPs: ${GREEN}${SELECTED_LOCAL_IPS[*]}${NC}"
+
+    # --- Remote IP Selection ---
+    echo -e "\n${CYAN}--- Remote Server IPs ---${NC}"
+    read -p "Enter Remote Server Public IPs (space separated): " -a REMOTE_IPS_INPUT
+    
+    if [ ${#REMOTE_IPS_INPUT[@]} -eq 0 ]; then
+        echo "${RED}No Remote IPs entered!${NC}"
+        return
+    fi
+
+    # --- Logic for Matching IPs ---
+    local count_local=${#SELECTED_LOCAL_IPS[@]}
+    local count_remote=${#REMOTE_IPS_INPUT[@]}
+    local loop_count=0
+    
+    if [ $count_local -gt $count_remote ]; then
+        loop_count=$count_local
+    else
+        loop_count=$count_remote
+    fi
+
+    echo -e "\n${YELLOW}Preparing to install $loop_count tunnels...${NC}"
+    echo "Press ENTER to start..."
+    read
+
+    enable_modules
+
+    for (( i=0; i<loop_count; i++ )); do
+        # Calculate current Tunnel ID
+        CURRENT_ID=$((START_TUN_ID + i))
+        
+        # Determine Local IP (Cyclic)
+        local_idx=$((i % count_local))
+        CURRENT_LOCAL_IP=${SELECTED_LOCAL_IPS[$local_idx]}
+        
+        # Determine Remote IP (Cyclic)
+        remote_idx=$((i % count_remote))
+        CURRENT_REMOTE_IP=${REMOTE_IPS_INPUT[$remote_idx]}
+        
+        echo -e "\n--------------------------------------------------"
+        echo -e "${BLUE}Configuring Tunnel #$CURRENT_ID${NC}"
+        echo -e "  Local Public IP: ${GREEN}$CURRENT_LOCAL_IP${NC}"
+        echo -e "  Remote Public IP: ${GREEN}$CURRENT_REMOTE_IP${NC}"
+        echo -e "--------------------------------------------------"
+        
+        setup_gretap_tunnel "$CURRENT_ID" "$CURRENT_LOCAL_IP" "$CURRENT_REMOTE_IP"
+        setup_keepalive "$CURRENT_ID"
+        
+        echo -e "${GREEN}✅ Tunnel $CURRENT_ID Installed!${NC}"
+    done
+    
+    echo -e "\n${GREEN}All batch operations completed.${NC}"
+    read -p "Press Enter to return..."
+}
+
 # Main Menu
 clear
 echo -e "${GREEN}====================================${NC}"
 echo -e "${GREEN}   GREtap Multi-Tunnel (10.10.x.x)  ${NC}"
 echo -e "${GREEN}====================================${NC}"
-echo "1) Install Tunnel"
-echo "2) Uninstall Menu"
-echo "3) Exit"
+echo "1) Single Install"
+echo "2) Batch Install (Multi)"
+echo "3) Uninstall Menu"
+echo "4) Exit"
 read -p "Select: " opt
 
 case $opt in
     1) install_tunnel ;;
-    2) uninstall_menu ;;
+    2) batch_install ;;
+    3) uninstall_menu ;;
     *) exit 0 ;;
 esac

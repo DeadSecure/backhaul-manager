@@ -29,7 +29,7 @@ show_banner() {
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║     XRAY REVERSE TUNNEL - UNIFIED MANAGER (FIXED)          ║"
     echo "║     XTLS-Vision + Reality | High Performance               ║"
-    echo "║     Version: 1.4 (Official Xray Field Names)                ║"
+    echo "║     Version: 1.5 (SNI: speedtest.net)                      ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -148,8 +148,8 @@ create_iran_config() {
       "streamSettings": {
         "network": "raw", "security": "reality",
         "realitySettings": {
-          "show": false, "target": "www.google.com:443", "xver": 0,
-          "serverNames": ["www.google.com", "www.googletagmanager.com"],
+          "show": false, "target": "www.speedtest.net:443", "xver": 0,
+          "serverNames": ["www.speedtest.net"],
           "privateKey": "$PRIVATE_KEY", "shortIds": ["", "0123456789abcdef"]
         },
         "sockopt": { "tcpKeepAlive": true, "tcpKeepAliveIdle": 100, "tcpKeepAliveInterval": 30 }
@@ -183,7 +183,7 @@ create_foreign_config() {
       "settings": { "vnext": [{ "address": "$iran_ip", "port": $iran_port, "users": [{ "id": "$tunnel_uuid", "flow": "xtls-rprx-vision", "encryption": "none" }] }] },
       "streamSettings": {
         "network": "raw", "security": "reality",
-        "realitySettings": { "show": false, "fingerprint": "chrome", "serverName": "www.google.com", "password": "$tunnel_password", "shortId": "", "spiderX": "" },
+        "realitySettings": { "show": false, "fingerprint": "chrome", "serverName": "www.speedtest.net", "password": "$tunnel_password", "shortId": "", "spiderX": "" },
         "sockopt": { "tcpKeepAlive": true, "tcpKeepAliveIdle": 100, "tcpKeepAliveInterval": 30 }
       },
       "mux": { "enabled": false, "concurrency": -1 }

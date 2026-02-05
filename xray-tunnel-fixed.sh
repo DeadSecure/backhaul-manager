@@ -29,7 +29,7 @@ show_banner() {
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║     XRAY REVERSE TUNNEL - UNIFIED MANAGER (FIXED)          ║"
     echo "║     XTLS-Vision + Reality | High Performance               ║"
-    echo "║     Version: 1.3 (Info Fix + Key Check)                    ║"
+    echo "║     Version: 1.4 (Official Xray Field Names)                ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -183,7 +183,7 @@ create_foreign_config() {
       "settings": { "vnext": [{ "address": "$iran_ip", "port": $iran_port, "users": [{ "id": "$tunnel_uuid", "flow": "xtls-rprx-vision", "encryption": "none" }] }] },
       "streamSettings": {
         "network": "raw", "security": "reality",
-        "realitySettings": { "show": false, "fingerprint": "chrome", "serverName": "www.google.com", "publicKey": "$tunnel_password", "shortId": "", "spiderX": "" },
+        "realitySettings": { "show": false, "fingerprint": "chrome", "serverName": "www.google.com", "password": "$tunnel_password", "shortId": "", "spiderX": "" },
         "sockopt": { "tcpKeepAlive": true, "tcpKeepAliveIdle": 100, "tcpKeepAliveInterval": 30 }
       },
       "mux": { "enabled": false, "concurrency": -1 }
@@ -370,7 +370,7 @@ show_info() {
             echo -e "Bridge Port: ${BLUE}$(cat $CONFIG_DIR/bridge_port)${NC}"
             echo -e "User Port: ${BLUE}$(cat $CONFIG_DIR/user_port)${NC}"
             if [ -f "$CONFIG_DIR/keys" ]; then
-                PK=$(grep -i "Password" "$CONFIG_DIR/keys" | awk '{print $NF}')
+                PK=$(grep -i "Public" "$CONFIG_DIR/keys" | awk '{print $NF}')
                 echo -e "Password: ${YELLOW}$PK${NC}"
             fi
         else
@@ -379,7 +379,7 @@ show_info() {
             
             # Extract password from current config
             if [ -f "$CONFIG_DIR/config.json" ]; then
-                CUR_PASS=$(grep -o '"publicKey": "[^"]*"' "$CONFIG_DIR/config.json" | cut -d'"' -f4)
+                CUR_PASS=$(grep -o '"password": "[^"]*"' "$CONFIG_DIR/config.json" | cut -d'"' -f4)
                 echo -e "Password:    ${YELLOW}$CUR_PASS${NC}"
             fi
         fi

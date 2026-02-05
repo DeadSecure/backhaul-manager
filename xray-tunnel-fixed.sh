@@ -29,6 +29,7 @@ show_banner() {
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║     XRAY REVERSE TUNNEL - UNIFIED MANAGER (FIXED)          ║"
     echo "║     XTLS-Vision + Reality | High Performance               ║"
+    echo "║     Version: 1.1 (Debug Mode Enabled)                      ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }

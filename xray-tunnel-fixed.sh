@@ -29,7 +29,7 @@ show_banner() {
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║     XRAY REVERSE TUNNEL - UNIFIED MANAGER (FIXED)          ║"
     echo "║     XTLS-Vision + Reality | High Performance               ║"
-    echo "║     Version: 1.2 (JSON Fix + Debug)                        ║"
+    echo "║     Version: 1.3 (Info Fix + Key Check)                    ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -376,6 +376,12 @@ show_info() {
         else
             echo -e "Iran Server: ${BLUE}$(cat $CONFIG_DIR/iran_addr)${NC}"
             echo -e "Destination: ${BLUE}$(cat $CONFIG_DIR/dest_addr)${NC}"
+            
+            # Extract password from current config
+            if [ -f "$CONFIG_DIR/config.json" ]; then
+                CUR_PASS=$(grep -o '"publicKey": "[^"]*"' "$CONFIG_DIR/config.json" | cut -d'"' -f4)
+                echo -e "Password:    ${YELLOW}$CUR_PASS${NC}"
+            fi
         fi
     else
         echo -e "${RED}[!] No tunnel configured.${NC}"

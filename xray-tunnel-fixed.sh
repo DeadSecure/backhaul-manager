@@ -90,8 +90,8 @@ open_firewall() {
 
 generate_keys() {
     $XRAY_PATH x25519 > "$CONFIG_DIR/keys" 2>/dev/null
-    PRIVATE_KEY=$(grep -i "PrivateKey" "$CONFIG_DIR/keys" | awk '{print $NF}' | tr -d ' \r')
-    PUBLIC_KEY=$(grep -i "Password" "$CONFIG_DIR/keys" | awk '{print $NF}' | tr -d ' \r')
+    PRIVATE_KEY=$(grep -i "Private" "$CONFIG_DIR/keys" | awk '{print $NF}' | tr -d ' \r')
+    PUBLIC_KEY=$(grep -i "Public" "$CONFIG_DIR/keys" | awk '{print $NF}' | tr -d ' \r')
 }
 
 create_iran_config() {

@@ -28,7 +28,7 @@ show_banner() {
     clear
     echo -e "${CYAN}"
     echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║     XRAY TUNNEL MANAGER v2.0 (DIRECT FORWARD)              ║"
+    echo "║     XRAY TUNNEL MANAGER v2.1 (DIRECT FORWARD)              ║"
     echo "║     Mode: Forward Tunnel (Iran -> Foreign)                 ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -204,6 +204,8 @@ setup_iran_client() {
     LOCAL_PORT=${LOCAL_PORT:-8080}
     
     UUID="55555555-5555-5555-5555-555555555555"
+
+    mkdir -p "$CONFIG_DIR"
 
     cat > "$CONFIG_DIR/config.json" << EOF
 {

@@ -29,7 +29,7 @@ show_banner() {
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║     XRAY REVERSE TUNNEL - UNIFIED MANAGER (FIXED)          ║"
     echo "║     XTLS-Vision + Reality | High Performance               ║"
-    echo "║     Version: 1.1 (Debug Mode Enabled)                      ║"
+    echo "║     Version: 1.2 (JSON Fix + Debug)                        ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -183,7 +183,7 @@ create_foreign_config() {
       "settings": { "vnext": [{ "address": "$iran_ip", "port": $iran_port, "users": [{ "id": "$tunnel_uuid", "flow": "xtls-rprx-vision", "encryption": "none" }] }] },
       "streamSettings": {
         "network": "raw", "security": "reality",
-        "realitySettings": { "show": false, "fingerprint": "chrome", "serverName": "www.google.com", "password": "$tunnel_password", "shortId": "", "spiderX": "" },
+        "realitySettings": { "show": false, "fingerprint": "chrome", "serverName": "www.google.com", "publicKey": "$tunnel_password", "shortId": "", "spiderX": "" },
         "sockopt": { "tcpKeepAlive": true, "tcpKeepAliveIdle": 100, "tcpKeepAliveInterval": 30 }
       },
       "mux": { "enabled": false, "concurrency": -1 }

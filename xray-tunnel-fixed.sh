@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # ╔════════════════════════════════════════════════════════════════╗
-# ║  XRAY REVERSE TUNNEL - UNIFIED MANAGER (FIXED & OPTIMIZED)     ║
-# ║  XTLS-Vision + Reality | High Performance | Auto-Reconnect     ║
+# ║  XRAY REVERSE TUNNEL - UNIFIED MANAGER (FIXED & FINAL)         ║
+# ║  XTLS-Vision + Reality | High Performance                      ║
+# ║  Version: 1.7 (SNI: speedtest.net + publicKey + Persistence)   ║
 # ╚════════════════════════════════════════════════════════════════╝
 
 # Colors
@@ -29,7 +30,7 @@ show_banner() {
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║     XRAY REVERSE TUNNEL - UNIFIED MANAGER (FIXED)          ║"
     echo "║     XTLS-Vision + Reality | High Performance               ║"
-    echo "║     Version: 1.6 (Key Persistence)                         ║"
+    echo "║     Version: 1.7 (SNI: speedtest.net + publicKey)          ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -173,6 +174,7 @@ create_foreign_config() {
     local dest_addr=$4
     local tunnel_uuid=$5
 
+    # NOTE: Using 'publicKey' instead of 'password' for broader compatibility, even if docs say renamed.
     cat > "$CONFIG_DIR/config.json" << EOF
 {
   "log": { "loglevel": "warning" },
@@ -188,7 +190,7 @@ create_foreign_config() {
       "settings": { "vnext": [{ "address": "$iran_ip", "port": $iran_port, "users": [{ "id": "$tunnel_uuid", "flow": "xtls-rprx-vision", "encryption": "none" }] }] },
       "streamSettings": {
         "network": "raw", "security": "reality",
-        "realitySettings": { "show": false, "fingerprint": "chrome", "serverName": "www.speedtest.net", "password": "$tunnel_password", "shortId": "", "spiderX": "" },
+        "realitySettings": { "show": false, "fingerprint": "chrome", "serverName": "www.speedtest.net", "publicKey": "$tunnel_password", "shortId": "", "spiderX": "" },
         "sockopt": { "tcpKeepAlive": true, "tcpKeepAliveIdle": 100, "tcpKeepAliveInterval": 30 }
       },
       "mux": { "enabled": false, "concurrency": -1 }
@@ -384,7 +386,7 @@ show_info() {
             
             # Extract password from current config
             if [ -f "$CONFIG_DIR/config.json" ]; then
-                CUR_PASS=$(grep -o '"password": "[^"]*"' "$CONFIG_DIR/config.json" | cut -d'"' -f4)
+                CUR_PASS=$(grep -o '"publicKey": "[^"]*"' "$CONFIG_DIR/config.json" | cut -d'"' -f4)
                 echo -e "Password:    ${YELLOW}$CUR_PASS${NC}"
             fi
         fi

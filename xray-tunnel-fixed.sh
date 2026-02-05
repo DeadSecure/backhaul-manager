@@ -89,9 +89,37 @@ open_firewall() {
 }
 
 generate_keys() {
-    $XRAY_PATH x25519 > "$CONFIG_DIR/keys" 2>/dev/null
+    echo -e "${YELLOW}[*] Generating Xray keys...${NC}"
+    
+    # Ensure Xray is executable
+    chmod +x "$XRAY_PATH" 2>/dev/null
+
+    # Generate keys with error visibility
+    if ! "$XRAY_PATH" x25519 > "$CONFIG_DIR/keys"; then
+        echo -e "${RED}[!] Error: Failed to run xray x25519${NC}"
+        echo -e "${RED}[!] Please ensure Xray is installed correctly at $XRAY_PATH${NC}"
+        ls -l "$XRAY_PATH"
+        return 1
+    fi
+
+    # Debug: Display content if parsing fails
+    # Cat the file so we can see what format it is inside the logs/output
+    # cat "$CONFIG_DIR/keys" 
+
+    # Robust parsing
     PRIVATE_KEY=$(grep -i "Private" "$CONFIG_DIR/keys" | awk '{print $NF}' | tr -d ' \r')
     PUBLIC_KEY=$(grep -i "Public" "$CONFIG_DIR/keys" | awk '{print $NF}' | tr -d ' \r')
+    
+    # Check if we got the keys
+    if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
+        echo -e "${RED}[!] Could not auto-detect keys from output:${NC}"
+        cat "$CONFIG_DIR/keys"
+        echo -e "${YELLOW}[!] Trying fallback parsing...${NC}"
+        
+        # Fallback for alternative formats
+        PRIVATE_KEY=$(head -n 1 "$CONFIG_DIR/keys" | awk '{print $NF}')
+        PUBLIC_KEY=$(tail -n 1 "$CONFIG_DIR/keys" | awk '{print $NF}')
+    fi
 }
 
 create_iran_config() {

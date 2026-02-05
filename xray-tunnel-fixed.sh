@@ -28,7 +28,7 @@ show_banner() {
     clear
     echo -e "${CYAN}"
     echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║     XRAY TUNNEL MANAGER v2.1 (DIRECT FORWARD)              ║"
+    echo "║     XRAY TUNNEL MANAGER v2.2 (FIREWALL FIX)                ║"
     echo "║     Mode: Forward Tunnel (Iran -> Foreign)                 ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -118,6 +118,8 @@ setup_foreign_server() {
     read -p "Enter Port to Listen on (default 443): " SERVER_PORT
     SERVER_PORT=${SERVER_PORT:-443}
 
+    open_firewall $SERVER_PORT
+
     # Fixed UUID for simplicity, or generate
     UUID="55555555-5555-5555-5555-555555555555"
 
@@ -202,6 +204,8 @@ setup_iran_client() {
     
     read -p "Local Listen Port (user connects here, default 8080): " LOCAL_PORT
     LOCAL_PORT=${LOCAL_PORT:-8080}
+    
+    open_firewall $LOCAL_PORT
     
     UUID="55555555-5555-5555-5555-555555555555"
 

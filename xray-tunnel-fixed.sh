@@ -3,7 +3,7 @@
 # ╔════════════════════════════════════════════════════════════════╗
 # ║  XRAY REVERSE TUNNEL - UNIFIED MANAGER (FIXED & FINAL)         ║
 # ║  XTLS-Vision + Reality | High Performance                      ║
-# ║  Version: 1.7 (SNI: speedtest.net + publicKey + Persistence)   ║
+# ║  Version: 1.9 (Original Logic + Stability Fixes)               ║
 # ╚════════════════════════════════════════════════════════════════╝
 
 # Colors
@@ -30,7 +30,7 @@ show_banner() {
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║     XRAY REVERSE TUNNEL - UNIFIED MANAGER (FIXED)          ║"
     echo "║     XTLS-Vision + Reality | High Performance               ║"
-    echo "║     Version: 1.7 (SNI: speedtest.net + publicKey)          ║"
+    echo "║     Version: 1.9 (Original Logic + Stability Fixes)        ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -40,6 +40,13 @@ install_xray() {
         echo -e "${YELLOW}[*] Installing Xray...${NC}"
         bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
     fi
+}
+
+sync_time() {
+    echo -e "${YELLOW}[*] Syncing System Time...${NC}"
+    timedatectl set-ntp true 2>/dev/null
+    systemctl restart systemd-timesyncd 2>/dev/null
+    sleep 1
 }
 
 apply_kernel_tuning() {
@@ -93,39 +100,25 @@ open_firewall() {
 generate_keys() {
     echo -e "${YELLOW}[*] Generating Xray keys...${NC}"
     
-    # Ensure Xray is executable
     chmod +x "$XRAY_PATH" 2>/dev/null
 
-    # Check if keys already exist to prevent rotation
+    # Prevent rotation if keys exist
     if [[ -s "$CONFIG_DIR/keys" ]]; then
         echo -e "${GREEN}[*] Existing keys found. Skipping generation.${NC}"
     else
-        # Generate keys with error visibility
-        if ! "$XRAY_PATH" x25519 > "$CONFIG_DIR/keys"; then
-            echo -e "${RED}[!] Error: Failed to run xray x25519${NC}"
-            echo -e "${RED}[!] Please ensure Xray is installed correctly at $XRAY_PATH${NC}"
-            ls -l "$XRAY_PATH"
-            return 1
-        fi
+        "$XRAY_PATH" x25519 > "$CONFIG_DIR/keys"
     fi
 
-    # Debug: Display content if parsing fails
-    # Cat the file so we can see what format it is inside the logs/output
-    # cat "$CONFIG_DIR/keys" 
-
-    # Robust parsing
+    # RESTORED ORIGINAL LOGIC: Grep for 'Password' (Primary) or 'Public' (Backup)
+    # The original script used 'Password', implying that's what the user's binary outputs.
     PRIVATE_KEY=$(grep -i "Private" "$CONFIG_DIR/keys" | awk '{print $NF}' | tr -d ' \r')
-    PUBLIC_KEY=$(grep -i "Public" "$CONFIG_DIR/keys" | awk '{print $NF}' | tr -d ' \r')
     
-    # Check if we got the keys
-    if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
-        echo -e "${RED}[!] Could not auto-detect keys from output:${NC}"
-        cat "$CONFIG_DIR/keys"
-        echo -e "${YELLOW}[!] Trying fallback parsing...${NC}"
-        
-        # Fallback for alternative formats
-        PRIVATE_KEY=$(head -n 1 "$CONFIG_DIR/keys" | awk '{print $NF}')
-        PUBLIC_KEY=$(tail -n 1 "$CONFIG_DIR/keys" | awk '{print $NF}')
+    # Try finding Password (original behavior)
+    PUBLIC_KEY=$(grep -i "Password" "$CONFIG_DIR/keys" | awk '{print $NF}' | tr -d ' \r')
+    
+    # If empty, try Public (standard behavior)
+    if [[ -z "$PUBLIC_KEY" ]]; then
+        PUBLIC_KEY=$(grep -i "Public" "$CONFIG_DIR/keys" | awk '{print $NF}' | tr -d ' \r')
     fi
 }
 
@@ -134,6 +127,7 @@ create_iran_config() {
     local user_port=$2
     local tunnel_uuid=$3
 
+    # RESTORED: Original SNI (google.com) to match working setup
     cat > "$CONFIG_DIR/config.json" << EOF
 {
   "log": { "loglevel": "warning" },
@@ -154,8 +148,8 @@ create_iran_config() {
       "streamSettings": {
         "network": "raw", "security": "reality",
         "realitySettings": {
-          "show": false, "target": "www.speedtest.net:443", "xver": 0,
-          "serverNames": ["www.speedtest.net"],
+          "show": false, "target": "www.google.com:443", "xver": 0,
+          "serverNames": ["www.google.com", "www.googletagmanager.com"],
           "privateKey": "$PRIVATE_KEY", "shortIds": ["", "0123456789abcdef"]
         },
         "sockopt": { "tcpKeepAlive": true, "tcpKeepAliveIdle": 100, "tcpKeepAliveInterval": 30 }
@@ -174,7 +168,7 @@ create_foreign_config() {
     local dest_addr=$4
     local tunnel_uuid=$5
 
-    # NOTE: Using 'publicKey' instead of 'password' for broader compatibility, even if docs say renamed.
+    # RESTORED: Original SNI (google.com) and 'password' field
     cat > "$CONFIG_DIR/config.json" << EOF
 {
   "log": { "loglevel": "warning" },
@@ -190,7 +184,7 @@ create_foreign_config() {
       "settings": { "vnext": [{ "address": "$iran_ip", "port": $iran_port, "users": [{ "id": "$tunnel_uuid", "flow": "xtls-rprx-vision", "encryption": "none" }] }] },
       "streamSettings": {
         "network": "raw", "security": "reality",
-        "realitySettings": { "show": false, "fingerprint": "chrome", "serverName": "www.speedtest.net", "publicKey": "$tunnel_password", "shortId": "", "spiderX": "" },
+        "realitySettings": { "show": false, "fingerprint": "chrome", "serverName": "www.google.com", "password": "$tunnel_password", "shortId": "", "spiderX": "" },
         "sockopt": { "tcpKeepAlive": true, "tcpKeepAliveIdle": 100, "tcpKeepAliveInterval": 30 }
       },
       "mux": { "enabled": false, "concurrency": -1 }
@@ -217,9 +211,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=$XRAY_PATH run -c $CONFIG_DIR/config.json
-# CHANGED: 'always' ensures restart even if exit code is 0 or killed
 Restart=always
-# CHANGED: reduced restart delay
 RestartSec=3
 LimitNOFILE=1048576
 
@@ -239,6 +231,8 @@ EOF
 setup_iran() {
     echo -e "${GREEN}[IRAN SERVER SETUP]${NC}"
     echo ""
+    
+    sync_time
     
     read -p "Enter Bridge Port (default 2096): " BRIDGE_PORT
     BRIDGE_PORT=${BRIDGE_PORT:-2096}
@@ -284,6 +278,8 @@ setup_iran() {
 setup_foreign() {
     echo -e "${GREEN}[FOREIGN SERVER SETUP]${NC}"
     echo ""
+    
+    sync_time
     
     read -p "Enter Iran Server (IP:PORT, e.g. 1.2.3.4:2096): " IRAN_ADDR
     
@@ -377,22 +373,47 @@ show_info() {
             echo -e "Bridge Port: ${BLUE}$(cat $CONFIG_DIR/bridge_port)${NC}"
             echo -e "User Port: ${BLUE}$(cat $CONFIG_DIR/user_port)${NC}"
             if [ -f "$CONFIG_DIR/keys" ]; then
-                PK=$(grep -i "Public" "$CONFIG_DIR/keys" | awk '{print $NF}')
+                # Check for Password match first (Old Xray)
+                PK=$(grep -i "Password" "$CONFIG_DIR/keys" | awk '{print $NF}')
+                if [[ -z "$PK" ]]; then
+                     # Fallback to Public (New Xray)
+                     PK=$(grep -i "Public" "$CONFIG_DIR/keys" | awk '{print $NF}')
+                fi
                 echo -e "Password: ${YELLOW}$PK${NC}"
             fi
         else
             echo -e "Iran Server: ${BLUE}$(cat $CONFIG_DIR/iran_addr)${NC}"
             echo -e "Destination: ${BLUE}$(cat $CONFIG_DIR/dest_addr)${NC}"
             
-            # Extract password from current config
+            # Extract password from current config (Robust check for password OR publicKey)
             if [ -f "$CONFIG_DIR/config.json" ]; then
-                CUR_PASS=$(grep -o '"publicKey": "[^"]*"' "$CONFIG_DIR/config.json" | cut -d'"' -f4)
+                CUR_PASS=$(grep -o '"password": "[^"]*"' "$CONFIG_DIR/config.json" | cut -d'"' -f4)
+                if [[ -z "$CUR_PASS" ]]; then
+                    CUR_PASS=$(grep -o '"publicKey": "[^"]*"' "$CONFIG_DIR/config.json" | cut -d'"' -f4)
+                fi
                 echo -e "Password:    ${YELLOW}$CUR_PASS${NC}"
             fi
         fi
     else
         echo -e "${RED}[!] No tunnel configured.${NC}"
     fi
+}
+
+debug_verify() {
+    echo -e "${CYAN}[DEBUG & VERIFICATION]${NC}"
+    echo "Time: $(date)"
+    echo "Xray Version: $($XRAY_PATH version | head -n 1)"
+    echo "--------------------------"
+    if [ -f "$CONFIG_DIR/config.json" ]; then
+        echo -e "${YELLOW}Config SNI/ServerNames:${NC}"
+        grep -E "serverName|serverNames|target" "$CONFIG_DIR/config.json"
+        echo "--------------------------"
+        echo -e "${YELLOW}Keys in Config:${NC}"
+        grep -E "privateKey|publicKey|password" "$CONFIG_DIR/config.json"
+    else
+        echo -e "${RED}No config found!${NC}"
+    fi
+    echo "--------------------------"
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -415,6 +436,7 @@ main_menu() {
         echo -e "6) ${BLUE}Show Info${NC}"
         echo -e "7) ${RED}Delete Tunnel${NC}"
         echo -e "8) ${YELLOW}Reconfigure${NC}"
+        echo -e "9) ${RED}DEBUG VERIFY${NC}"
         echo -e "0) Exit"
         echo ""
         read -p "Select option: " choice
@@ -428,6 +450,7 @@ main_menu() {
             6) show_info ;;
             7) delete_tunnel ;;
             8) setup_menu ;;
+            9) debug_verify ;;
             0) exit 0 ;;
             *) echo -e "${RED}Invalid option${NC}" ;;
         esac

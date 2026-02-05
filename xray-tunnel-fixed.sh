@@ -29,7 +29,7 @@ show_banner() {
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║     XRAY REVERSE TUNNEL - UNIFIED MANAGER (FIXED)          ║"
     echo "║     XTLS-Vision + Reality | High Performance               ║"
-    echo "║     Version: 1.5 (SNI: speedtest.net)                      ║"
+    echo "║     Version: 1.6 (Key Persistence)                         ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -95,12 +95,17 @@ generate_keys() {
     # Ensure Xray is executable
     chmod +x "$XRAY_PATH" 2>/dev/null
 
-    # Generate keys with error visibility
-    if ! "$XRAY_PATH" x25519 > "$CONFIG_DIR/keys"; then
-        echo -e "${RED}[!] Error: Failed to run xray x25519${NC}"
-        echo -e "${RED}[!] Please ensure Xray is installed correctly at $XRAY_PATH${NC}"
-        ls -l "$XRAY_PATH"
-        return 1
+    # Check if keys already exist to prevent rotation
+    if [[ -s "$CONFIG_DIR/keys" ]]; then
+        echo -e "${GREEN}[*] Existing keys found. Skipping generation.${NC}"
+    else
+        # Generate keys with error visibility
+        if ! "$XRAY_PATH" x25519 > "$CONFIG_DIR/keys"; then
+            echo -e "${RED}[!] Error: Failed to run xray x25519${NC}"
+            echo -e "${RED}[!] Please ensure Xray is installed correctly at $XRAY_PATH${NC}"
+            ls -l "$XRAY_PATH"
+            return 1
+        fi
     fi
 
     # Debug: Display content if parsing fails

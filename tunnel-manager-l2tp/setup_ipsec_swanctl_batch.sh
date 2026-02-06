@@ -35,8 +35,9 @@ get_public_ip() {
 install_dependencies() {
     log "Checking dependencies..."
 
-    if ! command -v swanctl &> /dev/null; then
-        log "Installing StrongSwan (swanctl)..."
+    # Check if the SERVICE exists, not just the binary
+    if ! systemctl list-unit-files | grep -q strongswan-swanctl.service; then
+        log "Installing StrongSwan (swanctl & charon-systemd)..."
         apt-get update -qq
         apt-get install -y -qq strongswan strongswan-pki libstrongswan-extra-plugins strongswan-swanctl charon-systemd
     fi

@@ -42,6 +42,27 @@ install_dependencies() {
         apt-get install -y -qq strongswan strongswan-pki libstrongswan-extra-plugins strongswan-swanctl charon-systemd
     fi
 
+    # MANUAL FIX: Create service file if still missing (Common issue on some Ubuntu builds)
+    if [ ! -f /lib/systemd/system/strongswan-swanctl.service ] && [ ! -f /etc/systemd/system/strongswan-swanctl.service ]; then
+        log "Service file missing! Creating /etc/systemd/system/strongswan-swanctl.service..."
+        cat > /etc/systemd/system/strongswan-swanctl.service <<EOF
+[Unit]
+Description=strongSwan IPsec IKEv2 daemon (charon-systemd)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/sbin/charon-systemd
+Restart=on-abnormal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
+        log "Service file created."
+    fi
+
     mkdir -p "$CONF_D_DIR"
 
     # Kernel Modules

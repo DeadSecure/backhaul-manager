@@ -67,14 +67,8 @@ setup_server() {
     # MTU Configuration
     read -p "Enter MTU (Default: 140): " MTU
     MTU=${MTU:-140}
-
-    SERVICE_NAME="gost-ssh-server"
     
-    # Create Systemd Service
-    # Note: Server side usually just listens for Relay+SSH. MTU is handled at the transport/forwarding level.
-    # However, if we want to enforce MTU on the server-side forwarding, we can add it.
-    # But typically, the client initiates the specialized transport.
-    # We will stick to the standard listener here as the Client side sets up the connection properties.
+    SERVICE_NAME="gost-ssh-server"
     
     cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
 [Unit]
@@ -128,26 +122,6 @@ setup_client() {
 
     SERVICE_NAME="gost-ssh-client"
     
-    # Create Systemd Service
-    # Local listener: tcp & udp on LOCAL_PORT
-    # Forwarder: relay+ssh to server WITH MTU parameter
-    # Based on user input: ./gost -L ... -F forward+mtu://...?mtu=140
-    # But here we are using relay+ssh. Let's try to append the parameter or chain it.
-    # Gost v2 doesn't support 'forward+mtu' directly on the 'relay+ssh' transport scheme in the same way.
-    # However, we can try adding the query parameter ?mtu=$MTU to the relay+ssh URL if supported,
-    # OR use the chain feature.
-    
-    # Attempt 1: Direct transport parameter (Most likely for generic transports)
-    # ExecStart=/usr/local/bin/gost -L :$LOCAL_PORT -F "relay+ssh://$USERNAME:$PASSWORD@$SERVER_IP:$SERVER_PORT?mtu=$MTU"
-    
-    # Attempt 2 (User's specific command style): -F forward+mtu://...?mtu=140
-    # The user showed: -F forward+mtu://10.0.0.2:3031?mtu=140
-    # We need to bridge SSH then Forward.
-    
-    # Let's trust the standard 'relay+ssh' supports transport modifiers or simply config tun/tap.
-    # BUT, since the user explicitly asked for 'forward+mtu' logic, we might need a specific chain.
-    # Since 'relay+ssh' already handles the encapsulation, adding ?mtu=140 to it might be the way.
-    
     EXEC_CMD="/usr/local/bin/gost -L :$LOCAL_PORT -F \"relay+ssh://$USERNAME:$PASSWORD@$SERVER_IP:$SERVER_PORT?mtu=$MTU\""
 
     cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
@@ -175,41 +149,103 @@ EOF
     echo -e "You can test it with: curl -x socks5h://127.0.0.1:$LOCAL_PORT https://api.ipify.org"
 }
 
-# Main Menu
-clear
-echo -e "${BLUE}=== Gost SSH+Relay Tunnel Manager (MTU Support) ===${NC}"
-echo "1) Install Gost"
-echo "2) Setup Server (Kharej / Destination)"
-echo "3) Setup Client (Iran / Origin)"
-echo "4) Uninstall Service"
-echo "0) Exit"
-read -p "Select option: " OPTION
-
-case $OPTION in
-    1)
-        install_gost
-        ;;
-    2)
-        install_gost
-        setup_server
-        ;;
-    3)
-        install_gost
-        setup_client
-        ;;
-    4)
-        read -p "Enter service name to remove (default: gost-ssh-client): " SVC
-        SVC=${SVC:-gost-ssh-client}
+uninstall_menu() {
+    echo -e "${BLUE}--- Uninstall Service ---${NC}"
+    
+    # Check for installed services
+    SERVER_EXISTS=false
+    CLIENT_EXISTS=false
+    
+    if [ -f "/etc/systemd/system/gost-ssh-server.service" ]; then
+        SERVER_EXISTS=true
+    fi
+    if [ -f "/etc/systemd/system/gost-ssh-client.service" ]; then
+        CLIENT_EXISTS=true
+    fi
+    
+    if [ "$SERVER_EXISTS" = false ] && [ "$CLIENT_EXISTS" = false ]; then
+        echo -e "${RED}No Gost services found.${NC}"
+        return
+    fi
+    
+    echo "Found services:"
+    if [ "$SERVER_EXISTS" = true ]; then
+        echo "1) gost-ssh-server"
+    fi
+    if [ "$CLIENT_EXISTS" = true ]; then
+        echo "2) gost-ssh-client"
+    fi
+    echo "0) Cancel"
+    
+    read -p "Select service to uninstall: " CHOICE
+    
+    SVC=""
+    case $CHOICE in
+        1)
+            if [ "$SERVER_EXISTS" = true ]; then
+                SVC="gost-ssh-server"
+            else
+                echo "Invalid choice."
+            fi
+            ;;
+        2)
+            if [ "$CLIENT_EXISTS" = true ]; then
+                SVC="gost-ssh-client"
+            else
+                echo "Invalid choice."
+            fi
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo "Invalid choice."
+            ;;
+    esac
+    
+    if [ ! -z "$SVC" ]; then
         systemctl stop $SVC
         systemctl disable $SVC
         rm /etc/systemd/system/$SVC.service
         systemctl daemon-reload
-        echo "Service removed."
-        ;;
-    0)
-        exit 0
-        ;;
-    *)
-        echo "Invalid option"
-        ;;
-esac
+        echo -e "${GREEN}Service '$SVC' removed successfully.${NC}"
+    fi
+}
+
+
+# Main Menu
+while true; do
+    echo -e "${BLUE}=== Gost SSH+Relay Tunnel Manager (MTU Support) ===${NC}"
+    echo "1) Install Gost"
+    echo "2) Setup Server (Kharej / Destination)"
+    echo "3) Setup Client (Iran / Origin)"
+    echo "4) Uninstall Service"
+    echo "0) Exit"
+    read -p "Select option: " OPTION
+
+    case $OPTION in
+        1)
+            install_gost
+            ;;
+        2)
+            install_gost
+            setup_server
+            exit 0
+            ;;
+        3)
+            install_gost
+            setup_client
+            exit 0
+            ;;
+        4)
+            uninstall_menu
+            exit 0
+            ;;
+        0)
+            exit 0
+            ;;
+        *)
+            echo "Invalid option"
+            ;;
+    esac
+done

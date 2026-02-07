@@ -107,26 +107,37 @@ EOF
 # Client Setup (Iran)
 setup_client() {
     echo -e "${BLUE}--- Setup Client (Iran) ---${NC}"
+    echo "This will forward traffic from a local port to a destination port on the server side."
     
     read -p "Enter Server IP: " SERVER_IP
-    read -p "Enter Server Port: " SERVER_PORT
+    read -p "Enter Server Port (Tunnel Port, e.g. 2222): " SERVER_PORT
     read -p "Enter Username: " USERNAME
     read -p "Enter Password: " PASSWORD
     
-    read -p "Enter Local Binding Port (SOCKS5/HTTP) (Default: 1080): " LOCAL_PORT
-    LOCAL_PORT=${LOCAL_PORT:-1080}
+    echo -e "\n${YELLOW}--- Forwarding Configuration ---${NC}"
+    read -p "Enter Local Listening Port (e.g. 5000): " LOCAL_PORT
+    read -p "Enter Destination IP:Port on Server (e.g. 127.0.0.1:3000): " DEST_ADDR
 
     # MTU Configuration
     read -p "Enter MTU for connect (Default: 140): " MTU
     MTU=${MTU:-140}
 
-    SERVICE_NAME="gost-ssh-client"
+    SERVICE_NAME="gost-ssh-client-$LOCAL_PORT"
     
-    EXEC_CMD="/usr/local/bin/gost -L :$LOCAL_PORT -F \"relay+ssh://$USERNAME:$PASSWORD@$SERVER_IP:$SERVER_PORT?mtu=$MTU\""
+    # Logic:
+    # -L tcp://:LOCAL_PORT/DEST_ADDR -L udp://:LOCAL_PORT/DEST_ADDR
+    # -F relay+ssh://...
+    
+    # Explanation:
+    # We want to listen on LOCAL_PORT (tcp/udp) and forward specifically to DEST_ADDR via the tunnel.
+    # The default behavior of -L :LOCAL_PORT acts as a generic proxy (socks5/http).
+    # To do port forwarding, we specify the target in -L.
+    
+    EXEC_CMD="/usr/local/bin/gost -L tcp://:$LOCAL_PORT/$DEST_ADDR -L udp://:$LOCAL_PORT/$DEST_ADDR -F \"relay+ssh://$USERNAME:$PASSWORD@$SERVER_IP:$SERVER_PORT?mtu=$MTU\""
 
     cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
 [Unit]
-Description=Gost SSH Tunnel Client
+Description=Gost SSH Forwarding Client ($LOCAL_PORT -> $DEST_ADDR)
 After=network.target
 
 [Service]
@@ -144,64 +155,40 @@ EOF
     systemctl restart $SERVICE_NAME
     
     echo -e "${GREEN}Client Setup Complete!${NC}"
-    echo -e "SOCKS5/HTTP Proxy is now running on port: ${YELLOW}$LOCAL_PORT${NC}"
-    echo -e "Connect with MTU: ${YELLOW}$MTU${NC}"
-    echo -e "You can test it with: curl -x socks5h://127.0.0.1:$LOCAL_PORT https://api.ipify.org"
+    echo -e "Traffic on Local Port ${YELLOW}$LOCAL_PORT${NC} is now forwarded to ${YELLOW}$DEST_ADDR${NC} via the tunnel."
+    echo -e "Using UDP & TCP."
 }
 
 uninstall_menu() {
     echo -e "${BLUE}--- Uninstall Service ---${NC}"
     
-    # Check for installed services
-    SERVER_EXISTS=false
-    CLIENT_EXISTS=false
+    # List all gost services
+    echo "Found services:"
+    # Use grep to find services starting with gost-ssh-
+    SERVICES=$(ls /etc/systemd/system/gost-ssh-*.service 2>/dev/null)
     
-    if [ -f "/etc/systemd/system/gost-ssh-server.service" ]; then
-        SERVER_EXISTS=true
-    fi
-    if [ -f "/etc/systemd/system/gost-ssh-client.service" ]; then
-        CLIENT_EXISTS=true
-    fi
-    
-    if [ "$SERVER_EXISTS" = false ] && [ "$CLIENT_EXISTS" = false ]; then
+    if [ -z "$SERVICES" ]; then
         echo -e "${RED}No Gost services found.${NC}"
         return
     fi
     
-    echo "Found services:"
-    if [ "$SERVER_EXISTS" = true ]; then
-        echo "1) gost-ssh-server"
-    fi
-    if [ "$CLIENT_EXISTS" = true ]; then
-        echo "2) gost-ssh-client"
-    fi
+    i=1
+    declare -A SERVICE_MAP
+    for svc_path in $SERVICES; do
+        svc_name=$(basename "$svc_path" .service)
+        echo "$i) $svc_name"
+        SERVICE_MAP[$i]=$svc_name
+        i=$((i+1))
+    done
     echo "0) Cancel"
     
     read -p "Select service to uninstall: " CHOICE
     
-    SVC=""
-    case $CHOICE in
-        1)
-            if [ "$SERVER_EXISTS" = true ]; then
-                SVC="gost-ssh-server"
-            else
-                echo "Invalid choice."
-            fi
-            ;;
-        2)
-            if [ "$CLIENT_EXISTS" = true ]; then
-                SVC="gost-ssh-client"
-            else
-                echo "Invalid choice."
-            fi
-            ;;
-        0)
-            return
-            ;;
-        *)
-            echo "Invalid choice."
-            ;;
-    esac
+    if [ "$CHOICE" == "0" ]; then
+        return
+    fi
+    
+    SVC=${SERVICE_MAP[$CHOICE]}
     
     if [ ! -z "$SVC" ]; then
         systemctl stop $SVC
@@ -209,16 +196,19 @@ uninstall_menu() {
         rm /etc/systemd/system/$SVC.service
         systemctl daemon-reload
         echo -e "${GREEN}Service '$SVC' removed successfully.${NC}"
+    else
+         echo "Invalid choice."
     fi
 }
 
 
 # Main Menu
 while true; do
-    echo -e "${BLUE}=== Gost SSH+Relay Tunnel Manager (MTU Support) ===${NC}"
+clear
+    echo -e "${BLUE}=== Gost SSH+Relay Tunnel Manager (Port Forwarding & MTU) ===${NC}"
     echo "1) Install Gost"
     echo "2) Setup Server (Kharej / Destination)"
-    echo "3) Setup Client (Iran / Origin)"
+    echo "3) Setup Client (Iran / Origin) - Port Forwarding"
     echo "4) Uninstall Service"
     echo "0) Exit"
     read -p "Select option: " OPTION
@@ -239,7 +229,7 @@ while true; do
             ;;
         4)
             uninstall_menu
-            exit 0
+            read -p "Press Enter to continue..."
             ;;
         0)
             exit 0

@@ -63,7 +63,11 @@ check_connection() {
     # 2. Check listening ports
     echo -e "\n${YELLOW}Checking Listening Ports...${NC}"
     # Extract ports from running services or just show all gost ports
-    netstat -tunlp | grep gost
+    if command -v netstat &> /dev/null; then
+        netstat -tunlp | grep gost
+    else
+        ss -tunlp | grep gost
+    fi
     
     # 3. Simple connectivity test (Optional)
     echo -e "\n${YELLOW}Testing Connectivity...${NC}"

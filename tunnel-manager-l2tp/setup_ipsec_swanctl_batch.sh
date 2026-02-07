@@ -33,18 +33,21 @@ get_public_ip() {
 # Install Dependencies
 # ==========================================
 install_dependencies() {
-    log "Checking dependencies..."
+    echo -e "${CYAN}[1/6] Checking StrongSwan installation...${NC}"
 
     # Check if the SERVICE exists, not just the binary
     if ! systemctl list-unit-files | grep -q strongswan-swanctl.service; then
-        log "Installing StrongSwan (swanctl & charon-systemd)..."
+        echo -e "${YELLOW}[1/6] Installing StrongSwan packages (this may take a minute)...${NC}"
         apt-get update -qq
         apt-get install -y -qq strongswan strongswan-pki libstrongswan-extra-plugins strongswan-swanctl charon-systemd
+        echo -e "${GREEN}[1/6] StrongSwan installed.${NC}"
+    else
+        echo -e "${GREEN}[1/6] StrongSwan already installed.${NC}"
     fi
 
-    # MANUAL FIX: Create service file if still missing (Common issue on some Ubuntu builds)
+    # MANUAL FIX: Create service file if still missing
     if [ ! -f /lib/systemd/system/strongswan-swanctl.service ] && [ ! -f /etc/systemd/system/strongswan-swanctl.service ]; then
-        log "Service file missing! Creating /etc/systemd/system/strongswan-swanctl.service..."
+        echo -e "${YELLOW}[2/6] Creating missing service file...${NC}"
         cat > /etc/systemd/system/strongswan-swanctl.service <<EOF
 [Unit]
 Description=strongSwan IPsec IKEv2 daemon (charon-systemd)
@@ -60,33 +63,39 @@ Restart=on-abnormal
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        log "Service file created."
+        echo -e "${GREEN}[2/6] Service file created.${NC}"
+    else
+        echo -e "${GREEN}[2/6] Service file exists.${NC}"
     fi
 
+    echo -e "${CYAN}[3/6] Loading kernel modules...${NC}"
     mkdir -p "$CONF_D_DIR"
+    modprobe af_key 2>/dev/null
+    modprobe ip_gre 2>/dev/null
+    echo -e "${GREEN}[3/6] Kernel modules loaded.${NC}"
 
-    # Kernel Modules
-    modprobe af_key >> "$LOG_FILE" 2>&1
-    modprobe ip_gre >> "$LOG_FILE" 2>&1
-
-    # CRITICAL: Disable legacy, Enable Modern
+    echo -e "${CYAN}[4/6] Disabling legacy StrongSwan services...${NC}"
     systemctl stop strongswan 2>/dev/null || true
     systemctl disable strongswan 2>/dev/null || true
     systemctl stop strongswan-starter 2>/dev/null || true
     systemctl disable strongswan-starter 2>/dev/null || true
+    echo -e "${GREEN}[4/6] Legacy services disabled.${NC}"
 
-    # Enable Charon-Systemd (The VICI backend)
-    systemctl enable strongswan-swanctl >> "$LOG_FILE" 2>&1
-    systemctl restart strongswan-swanctl >> "$LOG_FILE" 2>&1
-
-    sleep 2
+    echo -e "${CYAN}[5/6] Starting strongswan-swanctl service...${NC}"
+    systemctl enable strongswan-swanctl 2>/dev/null
+    systemctl restart strongswan-swanctl 2>/dev/null
+    # Wait only 1 second for service to be ready
+    sleep 1
+    echo -e "${GREEN}[5/6] Service started.${NC}"
 }
 
 configure_firewall() {
+    echo -e "${CYAN}[6/6] Configuring firewall rules...${NC}"
     iptables -I INPUT -p udp --dport 500 -j ACCEPT 2>/dev/null || true
     iptables -I INPUT -p udp --dport 4500 -j ACCEPT 2>/dev/null || true
     iptables -I INPUT -p 47 -j ACCEPT 2>/dev/null || true
     iptables -I INPUT -p esp -j ACCEPT 2>/dev/null || true
+    echo -e "${GREEN}[6/6] Firewall configured.${NC}"
 }
 
 setup_swanctl_config() {
@@ -332,19 +341,27 @@ batch_install() {
             final_gre_remote=$gre_local
         fi
 
-        echo -e "\n--------------------------------------------------"
-        echo -e "${BLUE}Configuring Tunnel #$CURRENT_ID${NC}"
-        echo -e "  Local Public IP: ${GREEN}$CURRENT_LOCAL_IP${NC}"
+        echo -e "\n${BLUE}══════════════════════════════════════════════════${NC}"
+        echo -e "${BLUE}  Tunnel #$CURRENT_ID (${i+1}/$loop_count)${NC}"
+        echo -e "${BLUE}══════════════════════════════════════════════════${NC}"
+        echo -e "  Local Public IP:  ${GREEN}$CURRENT_LOCAL_IP${NC}"
         echo -e "  Remote Public IP: ${GREEN}$CURRENT_REMOTE_IP${NC}"
-        echo -e "  GRE Local IP:    $final_gre_local"
-        echo -e "  GRE Remote IP:   $final_gre_remote"
-        echo -e "--------------------------------------------------"
+        echo -e "  GRE Local IP:     $final_gre_local"
+        echo -e "  GRE Remote IP:    $final_gre_remote"
         
+        echo -e "${CYAN}  [Step 1/3] Creating IPSec config...${NC}"
         setup_swanctl_config "$CURRENT_ID" "$CURRENT_LOCAL_IP" "$CURRENT_REMOTE_IP" "$PSK"
-        setup_gre_interface "$CURRENT_ID" "$CURRENT_LOCAL_IP" "$CURRENT_REMOTE_IP" "$final_gre_local" "$final_gre_remote"
-        setup_keepalive "$CURRENT_ID" "$final_gre_remote"
+        echo -e "${GREEN}  [Step 1/3] Done.${NC}"
         
-        echo -e "${GREEN}✅ Tunnel $CURRENT_ID Installed!${NC}"
+        echo -e "${CYAN}  [Step 2/3] Setting up GRE interface...${NC}"
+        setup_gre_interface "$CURRENT_ID" "$CURRENT_LOCAL_IP" "$CURRENT_REMOTE_IP" "$final_gre_local" "$final_gre_remote"
+        echo -e "${GREEN}  [Step 2/3] Done.${NC}"
+        
+        echo -e "${CYAN}  [Step 3/3] Enabling Keepalive...${NC}"
+        setup_keepalive "$CURRENT_ID" "$final_gre_remote"
+        echo -e "${GREEN}  [Step 3/3] Done.${NC}"
+        
+        echo -e "${GREEN}✅ Tunnel $CURRENT_ID Complete!${NC}"
     done
     
     echo -e "\n${GREEN}All batch operations completed.${NC}"

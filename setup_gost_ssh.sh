@@ -43,6 +43,51 @@ install_gost() {
     echo -e "${GREEN}Gost installed successfully!${NC}"
 }
 
+# Function to verify connection
+check_connection() {
+    echo -e "${BLUE}--- Check Tunnel Connection ---${NC}"
+    
+    # 1. Check services status
+    echo -e "${YELLOW}Checking Systemd Services...${NC}"
+    SERVICES=$(systemctl list-units --type=service --state=running | grep "gost-ssh-")
+    
+    if [ -z "$SERVICES" ]; then
+        echo -e "${RED}No running Gost services found!${NC}"
+        read -p "Press Enter to continue..."
+        return
+    else
+        echo -e "${GREEN}Running Services:${NC}"
+        echo "$SERVICES"
+    fi
+    
+    # 2. Check listening ports
+    echo -e "\n${YELLOW}Checking Listening Ports...${NC}"
+    # Extract ports from running services or just show all gost ports
+    netstat -tunlp | grep gost
+    
+    # 3. Simple connectivity test (Optional)
+    echo -e "\n${YELLOW}Testing Connectivity...${NC}"
+    read -p "Enter local port to test (e.g. 1080 or 5000): " TEST_PORT
+    if [[ ! -z "$TEST_PORT" ]]; then
+        # Check if it's a SOCKS proxy or Port Forward
+        # Try a simple curl
+        echo -e "Testing via SOCKS5..."
+        RESPONSE=$(curl -x socks5h://127.0.0.1:$TEST_PORT -s --connect-timeout 5 https://api.ipify.org)
+        
+        if [[ ! -z "$RESPONSE" ]]; then
+             echo -e "${GREEN}SOCKS5 Test Passed! Your IP: $RESPONSE${NC}"
+        else
+             echo -e "${RED}SOCKS5 Test Failed. (This is expected if port is not a SOCKS proxy)${NC}"
+             
+             echo -e "Testing via HTTP/Forward..."
+             # Just try to connect
+             nc -z -v -w5 127.0.0.1 $TEST_PORT
+        fi
+    fi
+    
+    read -p "Press Enter to continue..."
+}
+
 # Function to generate random password
 generate_password() {
     < /dev/urandom tr -dc A-Za-z0-9 | head -c 16
@@ -102,6 +147,7 @@ EOF
     echo -e "MTU:       ${YELLOW}$MTU (Set on Client)${NC}"
     echo -e "----------------------------------------"
     echo -e "Copy these details for the client setup."
+    read -p "Press Enter to continue..."
 }
 
 # Client Setup (Iran)
@@ -123,15 +169,6 @@ setup_client() {
     MTU=${MTU:-140}
 
     SERVICE_NAME="gost-ssh-client-$LOCAL_PORT"
-    
-    # Logic:
-    # -L tcp://:LOCAL_PORT/DEST_ADDR -L udp://:LOCAL_PORT/DEST_ADDR
-    # -F relay+ssh://...
-    
-    # Explanation:
-    # We want to listen on LOCAL_PORT (tcp/udp) and forward specifically to DEST_ADDR via the tunnel.
-    # The default behavior of -L :LOCAL_PORT acts as a generic proxy (socks5/http).
-    # To do port forwarding, we specify the target in -L.
     
     EXEC_CMD="/usr/local/bin/gost -L tcp://:$LOCAL_PORT/$DEST_ADDR -L udp://:$LOCAL_PORT/$DEST_ADDR -F \"relay+ssh://$USERNAME:$PASSWORD@$SERVER_IP:$SERVER_PORT?mtu=$MTU\""
 
@@ -157,6 +194,7 @@ EOF
     echo -e "${GREEN}Client Setup Complete!${NC}"
     echo -e "Traffic on Local Port ${YELLOW}$LOCAL_PORT${NC} is now forwarded to ${YELLOW}$DEST_ADDR${NC} via the tunnel."
     echo -e "Using UDP & TCP."
+    read -p "Press Enter to continue..."
 }
 
 uninstall_menu() {
@@ -169,6 +207,7 @@ uninstall_menu() {
     
     if [ -z "$SERVICES" ]; then
         echo -e "${RED}No Gost services found.${NC}"
+        read -p "Press Enter to continue..."
         return
     fi
     
@@ -199,37 +238,40 @@ uninstall_menu() {
     else
          echo "Invalid choice."
     fi
+    read -p "Press Enter to continue..."
 }
 
 
 # Main Menu
 while true; do
-clear
+    clear
     echo -e "${BLUE}=== Gost SSH+Relay Tunnel Manager (Port Forwarding & MTU) ===${NC}"
     echo "1) Install Gost"
     echo "2) Setup Server (Kharej / Destination)"
     echo "3) Setup Client (Iran / Origin) - Port Forwarding"
     echo "4) Uninstall Service"
+    echo "5) Check Connection / Status"
     echo "0) Exit"
     read -p "Select option: " OPTION
 
     case $OPTION in
         1)
             install_gost
+            read -p "Press Enter to continue..."
             ;;
         2)
             install_gost
             setup_server
-            exit 0
             ;;
         3)
             install_gost
             setup_client
-            exit 0
             ;;
         4)
             uninstall_menu
-            read -p "Press Enter to continue..."
+            ;;
+        5)
+            check_connection
             ;;
         0)
             exit 0

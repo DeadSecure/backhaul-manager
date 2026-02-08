@@ -116,7 +116,7 @@ while true; do
   
   # 2. Check IPsec SA (Prevent Split Brain)
   if [ \$FAIL -eq 0 ]; then
-      if ! timeout 5 /usr/sbin/swanctl --list-sas --child tun$ID | grep -q "ESTABLISHED"; then
+      if ! timeout 5 /usr/sbin/swanctl --list-sas --ike tun$ID | grep -q "ESTABLISHED"; then
           echo "\$(date): Ping OK but NO IPsec SA found for tun$ID! Force Recovery..."
           FAIL=1
       fi
@@ -311,7 +311,7 @@ while true; do
   
   # 2. Check IPsec SA (Prevent Traffic Leak)
   if [ \$FAIL -eq 0 ]; then
-      if ! timeout 5 /usr/sbin/swanctl --list-sas --child tun${ID} | grep -q "ESTABLISHED"; then
+      if ! timeout 5 /usr/sbin/swanctl --list-sas --ike tun${ID} | grep -q "ESTABLISHED"; then
           echo "\$(date): Ping OK but NO IPsec SA found! Security risk!"
           FAIL=1
       fi

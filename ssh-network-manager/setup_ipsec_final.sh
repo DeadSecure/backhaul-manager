@@ -244,12 +244,10 @@ connections {
         }
         children {
             tun${ID} {
-                local_ts = 0.0.0.0/0
-                remote_ts = 0.0.0.0/0
-                esp_proposals = aes256-sha256-modp128
-                start_action = start
                 mode = transport
-                # duplicate SA prevention handled by unique=replace
+                esp_proposals = aes256-sha256,aes128-sha1
+                start_action = start
+                dpd_action = restart
             }
         }
     }
@@ -264,25 +262,28 @@ EOF
     
     # GRE Script
     log "Creating GRE Service..."
-    cat <<EOF > /usr/local/bin/ipsec-gre-${ID}.sh
+    cat <<EOF > /usr/local/bin/ipsec-gre-up-${ID}.sh
 #!/bin/bash
-ip tunnel del gre${ID} 2>/dev/null
+ip tunnel del gre${ID} 2>/dev/null || true
 ip tunnel add gre${ID} mode gre remote ${REMOTE_IP} local ${LOCAL_IP} ttl 255
 ip link set gre${ID} up
 ip addr add ${GRE_LOCAL}/30 dev gre${ID}
 ip link set gre${ID} mtu 1400
 EOF
-    chmod +x /usr/local/bin/ipsec-gre-${ID}.sh
+    chmod +x /usr/local/bin/ipsec-gre-up-${ID}.sh
 
     cat <<EOF > /etc/systemd/system/ipsec-gre-${ID}.service
 [Unit]
-Description=GRE Tunnel ${ID} over IPsec
-After=strongswan-swanctl.service
+Description=GRE over IPsec Tunnel ${ID}
+After=network.target strongswan-swanctl.service
+Wants=strongswan-swanctl.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/ipsec-gre-${ID}.sh
+ExecStart=/usr/local/bin/ipsec-gre-up-${ID}.sh
+ExecStartPost=-/usr/sbin/swanctl --initiate --child tun${ID}
 RemainAfterExit=yes
+ExecStop=/sbin/ip tunnel del gre${ID}
 
 [Install]
 WantedBy=multi-user.target
@@ -301,11 +302,43 @@ EOF
 #!/bin/bash
 TARGET="${GRE_REMOTE}"
 while true; do
+  FAIL=0
+  
+  # 1. Check Ping
   if ! ping -c 6 -W 2 \$TARGET > /dev/null; then
-    echo "Ping failed. Recovering..."
-    timeout 5 swanctl --terminate --ike tun${ID} 2>/dev/null
-    sleep 2
+    FAIL=1
+  fi
+  
+  # 2. Check IPsec SA (Prevent Traffic Leak)
+  if [ \$FAIL -eq 0 ]; then
+      if ! timeout 5 /usr/sbin/swanctl --list-sas --child tun${ID} | grep -q "ESTABLISHED"; then
+          echo "\$(date): Ping OK but NO IPsec SA found! Security risk!"
+          FAIL=1
+      fi
+  fi
+
+  if [ \$FAIL -eq 1 ]; then
+    echo "\$(date): Connection lost (Ping or SA missing). Initiating recovery..."
+    
+    # 1. Soft retry
     timeout 5 swanctl --initiate --child tun${ID} 2>/dev/null
+    sleep 3
+    
+    # 2. Hard retry (Terminate stale SA)
+    if ! ping -c 2 -W 1 \$TARGET > /dev/null; then
+        echo "\$(date): Still down. Terminating stale connections..."
+        timeout 5 swanctl --terminate --ike tun${ID} 2>/dev/null
+        sleep 2
+        timeout 5 swanctl --initiate --child tun${ID} 2>/dev/null
+        
+        # 3. Last resort: Restart service
+        sleep 5
+        if ! ping -c 2 -W 1 \$TARGET > /dev/null; then
+             echo "\$(date): Restarting Service..."
+             systemctl restart ipsec-gre-${ID}
+        fi
+    fi
+    sleep 5
   fi
   sleep 10
 done
@@ -345,7 +378,7 @@ case $OPTION in
        read -p "Tunnel ID to remove: " ID
        systemctl disable --now ipsec-gre-${ID} ipsec-keepalive-${ID}
        rm -f /etc/systemd/system/ipsec-gre-${ID}.service /etc/systemd/system/ipsec-keepalive-${ID}.service
-       rm -f /usr/local/bin/ipsec-gre-${ID}.sh /usr/local/bin/ipsec-keepalive-${ID}.sh
+       rm -f /usr/local/bin/ipsec-gre-up-${ID}.sh /usr/local/bin/ipsec-keepalive-${ID}.sh
        rm -f /etc/swanctl/conf.d/tun${ID}.conf
        swanctl --load-all
        ip tunnel del gre${ID}

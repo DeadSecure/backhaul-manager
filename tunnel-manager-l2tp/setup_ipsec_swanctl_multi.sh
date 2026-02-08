@@ -37,14 +37,57 @@ get_public_ip() {
 # Core Functions
 # ==========================================
 
+install_global_health_monitor() {
+    # Skip if already installed and running
+    if systemctl is-active --quiet ipsec-health-monitor; then
+        return 0
+    fi
+    
+    log "Installing Global Health Monitor..."
+    
+    cat > /usr/local/bin/ipsec-health-monitor.sh <<'HMEOF'
+#!/bin/bash
+LOG_FILE="/var/log/ipsec-health.log"
+echo "$(date): Monitor started." >> "$LOG_FILE"
+while true; do
+    if ! timeout 5 swanctl --stats > /dev/null 2>&1; then
+        echo "$(date): VICI Socket Unresponsive! Force Restarting..." >> "$LOG_FILE"
+        rm -f /var/run/charon.vici /var/run/charon.pid
+        pkill -9 charon
+        systemctl kill -s SIGKILL strongswan-swanctl 2>/dev/null
+        sleep 2
+        systemctl restart strongswan-swanctl
+        sleep 10
+    fi
+    sleep 30
+done
+HMEOF
+    chmod +x /usr/local/bin/ipsec-health-monitor.sh
+    
+    cat > /etc/systemd/system/ipsec-health-monitor.service <<'HMSVCEOF'
+[Unit]
+Description=IPSec Health Monitor (VICI Socket Watchdog)
+After=strongswan-swanctl.service
+
+[Service]
+ExecStart=/usr/local/bin/ipsec-health-monitor.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+HMSVCEOF
+    
+    systemctl daemon-reload
+    systemctl enable --now ipsec-health-monitor >> "$LOG_FILE" 2>&1 || true
+}
+
 install_dependencies() {
     log "Checking dependencies..."
     
-    if ! command -v swanctl &> /dev/null; then
-        log "Installing StrongSwan (swanctl)..."
-        apt-get update -qq
-        apt-get install -y -qq strongswan strongswan-pki libstrongswan-extra-plugins strongswan-swanctl charon-systemd
-    fi
+    # Always install full package set (FIX: ensures charon-systemd is present)
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq strongswan strongswan-pki libstrongswan-extra-plugins strongswan-swanctl charon-systemd coreutils
     
     mkdir -p "$CONF_D_DIR"
     
@@ -57,12 +100,43 @@ install_dependencies() {
     systemctl disable strongswan 2>/dev/null || true
     systemctl stop strongswan-starter 2>/dev/null || true
     systemctl disable strongswan-starter 2>/dev/null || true
+    pkill charon 2>/dev/null || true
+    pkill starter 2>/dev/null || true
+    
+    # FIX: Ensure strongswan-swanctl.service exists (critical for some distros)
+    if [ ! -f /lib/systemd/system/strongswan-swanctl.service ] && [ ! -f /etc/systemd/system/strongswan-swanctl.service ]; then
+        log "Service file missing! Creating strongswan-swanctl.service..."
+        CHARON_PATH=$(command -v charon-systemd || dpkg -L charon-systemd | grep bin/charon | head -1)
+        if [ -z "$CHARON_PATH" ]; then CHARON_PATH="/usr/sbin/charon-systemd"; fi
+        
+        cat > /etc/systemd/system/strongswan-swanctl.service <<SVCEOF
+[Unit]
+Description=strongSwan IPsec IKEv2 daemon (charon-systemd)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$CHARON_PATH
+ExecStartPost=/bin/sleep 2
+ExecStartPost=-/usr/sbin/swanctl --load-all
+ExecReload=/usr/sbin/swanctl --reload
+Restart=on-abnormal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+        systemctl daemon-reload
+    fi
     
     # Enable Charon-Systemd (The VICI backend)
-    systemctl enable strongswan-swanctl >> "$LOG_FILE" 2>&1
-    systemctl restart strongswan-swanctl >> "$LOG_FILE" 2>&1
+    systemctl enable strongswan-swanctl >> "$LOG_FILE" 2>&1 || true
+    systemctl restart strongswan-swanctl >> "$LOG_FILE" 2>&1 || true
     
     sleep 2
+    
+    # Install Global Health Monitor (VICI Socket Watchdog)
+    install_global_health_monitor
 }
 
 configure_firewall() {
@@ -100,9 +174,8 @@ connections {
             tun${id} {
                 mode = transport
                 esp_proposals = aes256-sha256,aes128-sha1
-                start_action = trap
+                start_action = start
                 dpd_action = restart
-                dpd_delay = 30s
             }
         }
     }
@@ -164,20 +237,41 @@ setup_keepalive() {
     local id=$1
     local target=$2
     
+    # Enhanced Keepalive with SA verification (FIX from ipsec-fix.sh)
     cat > "/usr/local/bin/ipsec-keepalive-${id}.sh" <<EOF
 #!/bin/bash
 TARGET="$target"
 ID="$id"
 while true; do
-    # Logic matched with ssh-network-manager (Patient Keepalive)
-    if ! ping -c 6 -W 2 \$TARGET > /dev/null; then
-        echo "Connection lost. Re-initiating IPsec..."
-        swanctl --initiate --child tun\$ID
-        sleep 2
-        systemctl restart ipsec-gre-\$ID
+    FAIL=0
+    # Step 1: Ping check
+    if ! ping -c 6 -W 2 \$TARGET > /dev/null; then FAIL=1; fi
+    
+    # Step 2: Even if ping OK, verify SA is actually ESTABLISHED
+    if [ \$FAIL -eq 0 ]; then
+        if ! /usr/sbin/swanctl --list-sas --child tun\$ID 2>/dev/null | grep -q "ESTABLISHED"; then
+            echo "\$(date): Ping OK but NO IPsec SA for tun\$ID! Recovery..."
+            FAIL=1
+        fi
+    fi
+    
+    # Step 3: Recovery logic
+    if [ \$FAIL -eq 1 ]; then
+        echo "\$(date): Connection lost. Recovery..."
+        swanctl --initiate --child tun\$ID 2>/dev/null
+        sleep 3
+        if ! ping -c 2 -W 1 \$TARGET > /dev/null; then
+            swanctl --terminate --ike tun\$ID 2>/dev/null
+            sleep 2
+            swanctl --initiate --child tun\$ID 2>/dev/null
+            sleep 5
+            if ! ping -c 2 -W 1 \$TARGET > /dev/null; then
+                systemctl restart ipsec-gre-\$ID 2>/dev/null
+            fi
+        fi
         sleep 5
     fi
-    sleep 4
+    sleep 10
 done
 EOF
     chmod +x "/usr/local/bin/ipsec-keepalive-${id}.sh"

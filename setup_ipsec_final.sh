@@ -364,11 +364,43 @@ EOF
 }
 
 # ==========================================
+# 3. PING CHECK FUNCTION
+# ==========================================
+ping_tunnels() {
+    echo -e "\n${CYAN}--- GRE Tunnel Status ---${NC}"
+    
+    FOUND=0
+    for iface in $(ip -o link show | grep -oE 'gre[0-9]+'); do
+        FOUND=1
+        LOCAL_IP=$(ip -4 addr show "$iface" 2>/dev/null | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+        
+        if [ -n "$LOCAL_IP" ]; then
+            BASE=$(echo "$LOCAL_IP" | cut -d. -f1-3)
+            LAST=$(echo "$LOCAL_IP" | cut -d. -f4)
+            if [ "$LAST" = "1" ]; then REMOTE_IP="$BASE.2"; else REMOTE_IP="$BASE.1"; fi
+            
+            # Ping test
+            if ping -c 2 -W 1 "$REMOTE_IP" > /dev/null 2>&1; then
+                echo -e "${GREEN}●${NC} $iface: Local=$LOCAL_IP → Remote=$REMOTE_IP ${GREEN}[UP]${NC}"
+            else
+                echo -e "${RED}○${NC} $iface: Local=$LOCAL_IP → Remote=$REMOTE_IP ${RED}[DOWN]${NC}"
+            fi
+        fi
+    done
+    
+    if [ "$FOUND" -eq 0 ]; then
+        echo -e "${YELLOW}No GRE tunnels found.${NC}"
+    fi
+    echo ""
+}
+
+# ==========================================
 # MAIN MENU
 # ==========================================
 echo "1) Install New IPsec+GRE Tunnel"
 echo "2) Repair/Fix All Services (Duplicate SAs & Hangs)"
 echo "3) Uninstall a Tunnel"
+echo "4) Check Tunnel Status (Ping)"
 read -p "Select option: " OPTION
 
 case $OPTION in
@@ -384,5 +416,7 @@ case $OPTION in
        ip tunnel del gre${ID}
        success "Removed Tunnel ${ID}"
        ;;
+    4) ping_tunnels ;;
     *) echo "Invalid option" ;;
 esac
+

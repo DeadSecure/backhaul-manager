@@ -69,12 +69,10 @@ check_connection() {
         ss -tunlp | grep gost
     fi
     
-    # 3. Simple connectivity test (Optional)
+    # 3. Simple connectivity test
     echo -e "\n${YELLOW}Testing Connectivity...${NC}"
     read -p "Enter local port to test (e.g. 1080 or 5000): " TEST_PORT
     if [[ ! -z "$TEST_PORT" ]]; then
-        # Check if it's a SOCKS proxy or Port Forward
-        # Try a simple curl
         echo -e "Testing via SOCKS5..."
         RESPONSE=$(curl -x socks5h://127.0.0.1:$TEST_PORT -s --connect-timeout 5 https://api.ipify.org)
         
@@ -84,11 +82,80 @@ check_connection() {
              echo -e "${RED}SOCKS5 Test Failed. (This is expected if port is not a SOCKS proxy)${NC}"
              
              echo -e "Testing via HTTP/Forward..."
-             # Just try to connect
              nc -z -v -w5 127.0.0.1 $TEST_PORT
         fi
     fi
     
+    read -p "Press Enter to continue..."
+}
+
+# Function to create Watchdog
+setup_watchdog() {
+    echo -e "${BLUE}--- Setup Auto-Reconnect Watchdog ---${NC}"
+    
+    # Check for installed client services
+    SERVICES=$(ls /etc/systemd/system/gost-ssh-client-*.service 2>/dev/null)
+    if [ -z "$SERVICES" ]; then
+         echo -e "${RED}No Gost Client services found to monitor.${NC}"
+         read -p "Press Enter to continue..."
+         return
+    fi
+    
+    echo "Select service to monitor:"
+    i=1
+    declare -A SERVICE_MAP
+    for svc_path in $SERVICES; do
+        svc_name=$(basename "$svc_path" .service)
+        # Extract port from name gost-ssh-client-PORT
+        PORT=$(echo "$svc_name" | awk -F'-' '{print $4}')
+        echo "$i) $svc_name (Port: $PORT)"
+        SERVICE_MAP[$i]=$svc_name
+        PORT_MAP[$i]=$PORT
+        i=$((i+1))
+    done
+    echo "0) Cancel"
+    
+    read -p "Select options: " OPTION
+    if [ "$OPTION" == "0" ]; then return; fi
+    
+    SVC=${SERVICE_MAP[$OPTION]}
+    PORT=${PORT_MAP[$OPTION]}
+    
+    if [ -z "$SVC" ]; then echo "Invalid option"; return; fi
+    
+    WATCHDOG_SCRIPT="/usr/local/bin/watchdog-$SVC.sh"
+    
+    # Create monitoring script
+    # It checks if port is listening AND if we can connect to it.
+    # If not, it restarts the service.
+    cat <<EOF > $WATCHDOG_SCRIPT
+#!/bin/bash
+# Check if service is active
+IS_ACTIVE=\$(systemctl is-active $SVC)
+if [ "\$IS_ACTIVE" != "active" ]; then
+    echo "Service $SVC is not active. Restarting..."
+    systemctl restart $SVC
+    exit 0
+fi
+
+# Check connection (TCP connect)
+nc -z -w 5 127.0.0.1 $PORT
+if [ \$? -ne 0 ]; then
+    echo "Port $PORT is not reachable. Restarting tunnel..."
+    systemctl restart $SVC
+else
+    echo "Tunnel $SVC on port $PORT is healthy."
+fi
+EOF
+    
+    chmod +x $WATCHDOG_SCRIPT
+    
+    # Add to crontab if not exists
+    CRON_CMD="* * * * * $WATCHDOG_SCRIPT >> /var/log/gost-watchdog.log 2>&1"
+    (crontab -l 2>/dev/null | grep -v "$WATCHDOG_SCRIPT"; echo "$CRON_CMD") | crontab -
+    
+    echo -e "${GREEN}Watchdog installed!${NC}"
+    echo -e "It will check the connection every minute and restart if down."
     read -p "Press Enter to continue..."
 }
 
@@ -128,6 +195,8 @@ After=network.target
 Type=simple
 ExecStart=/usr/local/bin/gost -L "relay+ssh://$USERNAME:$PASSWORD@:$PORT"
 Restart=always
+RestartSec=3
+StartLimitInterval=0
 User=root
 
 [Install]
@@ -185,6 +254,8 @@ After=network.target
 Type=simple
 ExecStart=$EXEC_CMD
 Restart=always
+RestartSec=3
+StartLimitInterval=0
 User=root
 
 [Install]
@@ -198,6 +269,30 @@ EOF
     echo -e "${GREEN}Client Setup Complete!${NC}"
     echo -e "Traffic on Local Port ${YELLOW}$LOCAL_PORT${NC} is now forwarded to ${YELLOW}$DEST_ADDR${NC} via the tunnel."
     echo -e "Using UDP & TCP."
+    
+    # Ask for Watchdog Auto-Setup
+    read -p "Do you want to enable Auto-Reconnect Watchdog? (y/n): " WD
+    if [[ "$WD" == "y" ]]; then
+         # Manually invoke watchdog logic for this service
+         WATCHDOG_SCRIPT="/usr/local/bin/watchdog-$SERVICE_NAME.sh"
+         cat <<EOF > \$WATCHDOG_SCRIPT
+#!/bin/bash
+IS_ACTIVE=\$(systemctl is-active $SERVICE_NAME)
+if [ "\$IS_ACTIVE" != "active" ]; then
+    systemctl restart $SERVICE_NAME
+    exit 0
+fi
+nc -z -w 5 127.0.0.1 $LOCAL_PORT
+if [ \$? -ne 0 ]; then
+    systemctl restart $SERVICE_NAME
+fi
+EOF
+        chmod +x \$WATCHDOG_SCRIPT
+        CRON_CMD="* * * * * \$WATCHDOG_SCRIPT >> /var/log/gost-watchdog.log 2>&1"
+        (crontab -l 2>/dev/null | grep -v "\$WATCHDOG_SCRIPT"; echo "\$CRON_CMD") | crontab -
+        echo -e "${GREEN}Watchdog enabled.${NC}"
+    fi
+
     read -p "Press Enter to continue..."
 }
 
@@ -237,6 +332,16 @@ uninstall_menu() {
         systemctl stop $SVC
         systemctl disable $SVC
         rm /etc/systemd/system/$SVC.service
+        
+        # Remove watchdog if exists
+        WD_SCRIPT="/usr/local/bin/watchdog-$SVC.sh"
+        if [ -f "$WD_SCRIPT" ]; then
+            rm "$WD_SCRIPT"
+            # Remove from cron
+            crontab -l | grep -v "$WD_SCRIPT" | crontab -
+            echo "Watchdog removed."
+        fi
+        
         systemctl daemon-reload
         echo -e "${GREEN}Service '$SVC' removed successfully.${NC}"
     else
@@ -255,6 +360,7 @@ while true; do
     echo "3) Setup Client (Iran / Origin) - Port Forwarding"
     echo "4) Uninstall Service"
     echo "5) Check Connection / Status"
+    echo "6) Setup Watchdog (Auto Reconnect)"
     echo "0) Exit"
     read -p "Select option: " OPTION
 
@@ -277,6 +383,9 @@ while true; do
         5)
             check_connection
             ;;
+        6)
+           setup_watchdog
+           ;;
         0)
             exit 0
             ;;

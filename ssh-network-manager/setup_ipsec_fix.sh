@@ -63,8 +63,8 @@ fi
 echo "Starting service..."
 systemctl enable strongswan-swanctl 2>/dev/null || true
 systemctl restart strongswan-swanctl || true
-echo "Waiting 15s for service warmup..."
-sleep 15
+echo "Waiting 2s for service warmup..."
+sleep 2
 
 # Verify Running
 if pgrep -x charon >/dev/null; then
@@ -72,7 +72,7 @@ if pgrep -x charon >/dev/null; then
 else
     echo "Charon failed to start! Attempting manual start..."
     nohup $CHARON_PATH >/dev/null 2>&1 &
-    sleep 5
+    sleep 3
 fi
 
 # 5. Fix Config Issues
@@ -114,7 +114,7 @@ for script in /usr/local/bin/ipsec-keepalive-*.sh /usr/local/bin/keepalive-ipsec
     cat <<EOF > "$script"
 #!/bin/bash
 TARGET="$TARGET"
-echo "DEBUG: SCRIPT UPDATED BY ANTIGRAVITY FIXER"
+echo "DEBUG: SCRIPT UPDATED BY ANTIGRAVITY"
 EOF
 
     cat <<'EOF' >> "$script"
@@ -164,6 +164,8 @@ done
 
 # 8. Install Global Health Monitor
 echo "Installing Health Monitor..."
+# Ensure timeout command exists (matched from JS line 571)
+command -v timeout >/dev/null 2>&1 || apt-get install -y coreutils
 cat <<EOF > /usr/local/bin/ipsec-health-monitor.sh
 #!/bin/bash
 LOG_FILE="/var/log/ipsec-health.log"

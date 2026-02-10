@@ -320,7 +320,7 @@ test_tunnel() {
 }
 
 # ==========================================
-# Uninstall
+# Uninstall Single Tunnel
 # ==========================================
 uninstall_tunnel() {
     read -p "Enter Tunnel ID to remove: " TUN_ID
@@ -330,20 +330,103 @@ uninstall_tunnel() {
 
     log_step "Removing tunnel ${TUN_ID}..."
 
+    # IPIP+FOU
     systemctl stop "ipip-fou-${TUN_ID}" 2>/dev/null
     systemctl disable "ipip-fou-${TUN_ID}" 2>/dev/null
     rm -f "/etc/systemd/system/ipip-fou-${TUN_ID}.service"
-
     ip link del "$IFACE_NAME" 2>/dev/null
 
-    # Try to find and remove FOU port from service file
-    FOU_PORT=$(grep -oP 'port \K[0-9]+' "/etc/systemd/system/ipip-fou-${TUN_ID}.service" 2>/dev/null | head -1)
-    if [ -n "$FOU_PORT" ]; then
-        ip fou del port "$FOU_PORT" 2>/dev/null
-    fi
+    # FOU port
+    ip fou del port 6000 2>/dev/null
+    ip fou del port 443 2>/dev/null
 
     systemctl daemon-reload
     log_info "Tunnel ${TUN_ID} removed"
+}
+
+# ==========================================
+# CLEAN EVERYTHING
+# ==========================================
+clean_all() {
+    echo ""
+    echo -e "${RED}=== CLEAN ALL TUNNELS ===${NC}"
+    echo ""
+    echo "This will remove:"
+    echo "  - All IPIP+FOU tunnels"
+    echo "  - All Phantun tunnels"
+    echo "  - All WireGuard (wg_ph) tunnels"
+    echo "  - Related iptables rules"
+    echo "  - Phantun binaries"
+    echo ""
+    read -p "Are you sure? (yes/NO): " confirm
+    if [ "$confirm" != "yes" ]; then
+        echo "Cancelled."
+        return
+    fi
+
+    log_step "Removing IPIP+FOU tunnels..."
+    for i in $(seq 1 10); do
+        systemctl stop "ipip-fou-${i}" 2>/dev/null
+        systemctl disable "ipip-fou-${i}" 2>/dev/null
+        rm -f "/etc/systemd/system/ipip-fou-${i}.service"
+        ip link del "ipip_ph${i}" 2>/dev/null
+    done
+    # Remove all FOU ports
+    ip fou del port 6000 2>/dev/null
+    ip fou del port 443 2>/dev/null
+    ip fou del port 80 2>/dev/null
+
+    log_step "Removing Phantun tunnels..."
+    for i in $(seq 1 10); do
+        systemctl stop "phantun-server-${i}" 2>/dev/null
+        systemctl stop "phantun-client-${i}" 2>/dev/null
+        systemctl stop "phantun-${i}" 2>/dev/null
+        systemctl disable "phantun-server-${i}" 2>/dev/null
+        systemctl disable "phantun-client-${i}" 2>/dev/null
+        systemctl disable "phantun-${i}" 2>/dev/null
+        rm -f "/etc/systemd/system/phantun-server-${i}.service"
+        rm -f "/etc/systemd/system/phantun-client-${i}.service"
+        rm -f "/etc/systemd/system/phantun-${i}.service"
+    done
+
+    log_step "Removing WireGuard (wg_ph)..."
+    wg-quick down wg_ph 2>/dev/null
+    systemctl disable "wg-quick@wg_ph" 2>/dev/null
+    rm -f /etc/wireguard/wg_ph.conf
+    rm -f /etc/wireguard/wg_ph_private
+    rm -f /etc/wireguard/wg_ph_public
+
+    log_step "Removing Phantun binaries..."
+    rm -f /usr/local/bin/phantun_server
+    rm -f /usr/local/bin/phantun_client
+    rm -f /usr/local/bin/phantun.server
+    rm -f /usr/local/bin/phantun.client
+
+    log_step "Cleaning iptables rules..."
+    # Phantun DNAT/MASQUERADE rules
+    iptables -t nat -D PREROUTING -p tcp --dport 4567 -j DNAT --to-destination 192.168.201.2 2>/dev/null
+    iptables -t nat -D POSTROUTING -s 192.168.200.0/24 -j MASQUERADE 2>/dev/null
+    # Clean Phantun config dir
+    rm -rf /etc/phantun
+
+    log_step "Removing TUN interfaces..."
+    for i in $(seq 1 10); do
+        ip link del "tun_ph${i}" 2>/dev/null
+    done
+
+    systemctl daemon-reload
+
+    echo ""
+    echo -e "${GREEN}============================================${NC}"
+    echo -e "${GREEN}  Everything cleaned!${NC}"
+    echo -e "${GREEN}============================================${NC}"
+    echo ""
+
+    echo -e "${CYAN}Remaining tunnel interfaces:${NC}"
+    ip link show | grep -E "(ipip_ph|tun_ph|wg_ph)" || echo "  None"
+    echo ""
+    echo -e "${CYAN}Remaining services:${NC}"
+    systemctl list-units --type=service --all | grep -E "(phantun|ipip-fou|wg_ph)" || echo "  None"
 }
 
 # ==========================================
@@ -351,14 +434,15 @@ uninstall_tunnel() {
 # ==========================================
 clear
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  IPIP + FOU Tunnel Manager v1.0${NC}"
+echo -e "${GREEN}  IPIP + FOU Tunnel Manager v1.1${NC}"
 echo -e "${GREEN}  Simple Private IP Tunnel${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 echo "1) Setup KHAREJ (Server)"
 echo "2) Setup IRAN (Client)"
 echo "3) Test Connection"
-echo "4) Uninstall Tunnel"
+echo "4) Uninstall Single Tunnel"
+echo "5) CLEAN EVERYTHING (remove all)"
 echo "0) Exit"
 echo ""
 read -p "Select: " opt
@@ -368,5 +452,6 @@ case $opt in
     2) setup_client ;;
     3) test_tunnel ;;
     4) uninstall_tunnel ;;
+    5) clean_all ;;
     *) exit 0 ;;
 esac

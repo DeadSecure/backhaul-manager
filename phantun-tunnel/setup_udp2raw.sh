@@ -254,265 +254,6 @@ EOF
 }
 
 # ==========================================
-# Quick Setup: udp2raw + IPIP+FOU (Full Tunnel)
-# ==========================================
-setup_full_server() {
-    echo ""
-    echo -e "${BLUE}=== Full Tunnel: udp2raw + IPIP+FOU (KHAREJ) ===${NC}"
-    echo ""
-
-    install_udp2raw || return 1
-    select_mode
-
-    read -p "Enter Tunnel ID [1]: " TUN_ID
-    TUN_ID=${TUN_ID:-1}
-
-    read -p "Enter udp2raw listen port [4096]: " RAW_PORT
-    RAW_PORT=${RAW_PORT:-4096}
-
-    FOU_PORT=5555
-    IFACE="ipip_u2r${TUN_ID}"
-
-    read -p "Enter private IP for THIS server [10.30.${TUN_ID}.1]: " MY_IP
-    MY_IP=${MY_IP:-10.30.${TUN_ID}.1}
-
-    PEER_IP="10.30.${TUN_ID}.2"
-
-    read -p "Enter password [tunnel123]: " PASSWORD
-    PASSWORD=${PASSWORD:-tunnel123}
-
-    echo ""
-    echo -e "${BLUE}========= Full Server Config =========${NC}"
-    echo -e "  Mode       : ${RAW_MODE}"
-    echo -e "  udp2raw    : 0.0.0.0:${RAW_PORT} -> 127.0.0.1:${FOU_PORT}"
-    echo -e "  IPIP iface : ${IFACE}"
-    echo -e "  Private IP : ${MY_IP} <-> ${PEER_IP}"
-    echo -e "${BLUE}======================================${NC}"
-    read -p "Press ENTER to apply..."
-
-    # Load modules
-    modprobe fou
-    modprobe ipip
-    sysctl -w net.ipv4.ip_forward=1 > /dev/null
-
-    # Clean
-    ip link del "$IFACE" 2>/dev/null
-    ip fou del port "$FOU_PORT" 2>/dev/null
-
-    # FOU receiver
-    log_step "Setting up FOU on 127.0.0.1:${FOU_PORT}..."
-    ip fou add port "$FOU_PORT" ipproto 4
-
-    # IPIP tunnel (through localhost via udp2raw)
-    log_step "Creating IPIP tunnel..."
-    ip link add "$IFACE" type ipip \
-        remote 127.0.0.1 \
-        local 127.0.0.1 \
-        encap fou \
-        encap-sport auto \
-        encap-dport "$FOU_PORT"
-
-    ip addr add "${MY_IP}" peer "${PEER_IP}/32" dev "$IFACE"
-    ip link set "$IFACE" up mtu 1300
-
-    # udp2raw service
-    log_step "Creating udp2raw service..."
-    cat > "/etc/systemd/system/udp2raw-server-${TUN_ID}.service" <<EOF
-[Unit]
-Description=udp2raw Server ${TUN_ID} (${RAW_MODE}) + FOU
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=${UDP2RAW_BIN} -s -l 0.0.0.0:${RAW_PORT} -r 127.0.0.1:${FOU_PORT} --raw-mode ${RAW_MODE} -a -k "${PASSWORD}"
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # IPIP service
-    cat > "/etc/systemd/system/ipip-u2r-${TUN_ID}.service" <<EOF
-[Unit]
-Description=IPIP over udp2raw ${TUN_ID}
-After=network.target udp2raw-server-${TUN_ID}.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStartPre=/sbin/modprobe fou
-ExecStartPre=/sbin/modprobe ipip
-ExecStartPre=-/sbin/ip link del ${IFACE}
-ExecStartPre=-/sbin/ip fou del port ${FOU_PORT}
-ExecStart=/bin/bash -c '\
-    ip fou add port ${FOU_PORT} ipproto 4 && \
-    ip link add ${IFACE} type ipip \
-        remote 127.0.0.1 local 127.0.0.1 \
-        encap fou encap-sport auto encap-dport ${FOU_PORT} && \
-    ip addr add ${MY_IP} peer ${PEER_IP}/32 dev ${IFACE} && \
-    ip link set ${IFACE} up mtu 1300'
-ExecStop=/sbin/ip link del ${IFACE}
-ExecStop=/sbin/ip fou del port ${FOU_PORT}
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable "udp2raw-server-${TUN_ID}" "ipip-u2r-${TUN_ID}"
-    systemctl restart "udp2raw-server-${TUN_ID}"
-
-    sleep 2
-    if systemctl is-active --quiet "udp2raw-server-${TUN_ID}"; then
-        log_info "udp2raw Server RUNNING"
-    else
-        log_err "udp2raw failed. Logs:"
-        journalctl -u "udp2raw-server-${TUN_ID}" -n 10 --no-pager
-    fi
-
-    echo ""
-    echo -e "${GREEN}============================================${NC}"
-    echo -e "${GREEN}  Full Server ready!${NC}"
-    echo -e "${GREEN}  Private IP : ${MY_IP}${NC}"
-    echo -e "${GREEN}  udp2raw    : port ${RAW_PORT} (${RAW_MODE})${NC}"
-    echo -e "${GREEN}============================================${NC}"
-}
-
-setup_full_client() {
-    echo ""
-    echo -e "${BLUE}=== Full Tunnel: udp2raw + IPIP+FOU (IRAN) ===${NC}"
-    echo ""
-
-    install_udp2raw || return 1
-    select_mode
-
-    read -p "Enter Tunnel ID [1]: " TUN_ID
-    TUN_ID=${TUN_ID:-1}
-
-    read -p "Enter KHAREJ server public IP: " REMOTE_IP
-    if [ -z "$REMOTE_IP" ]; then
-        log_err "Remote IP required"
-        return 1
-    fi
-
-    read -p "Enter udp2raw remote port (same as server) [4096]: " RAW_PORT
-    RAW_PORT=${RAW_PORT:-4096}
-
-    FOU_PORT=5555
-    IFACE="ipip_u2r${TUN_ID}"
-
-    read -p "Enter private IP for THIS server [10.30.${TUN_ID}.2]: " MY_IP
-    MY_IP=${MY_IP:-10.30.${TUN_ID}.2}
-
-    PEER_IP="10.30.${TUN_ID}.1"
-
-    read -p "Enter password (same as server) [tunnel123]: " PASSWORD
-    PASSWORD=${PASSWORD:-tunnel123}
-
-    echo ""
-    echo -e "${BLUE}========= Full Client Config =========${NC}"
-    echo -e "  Mode       : ${RAW_MODE}"
-    echo -e "  Remote     : ${REMOTE_IP}:${RAW_PORT}"
-    echo -e "  udp2raw    : 127.0.0.1:${FOU_PORT}"
-    echo -e "  IPIP iface : ${IFACE}"
-    echo -e "  Private IP : ${MY_IP} <-> ${PEER_IP}"
-    echo -e "${BLUE}======================================${NC}"
-    read -p "Press ENTER to apply..."
-
-    # Load modules
-    modprobe fou
-    modprobe ipip
-    sysctl -w net.ipv4.ip_forward=1 > /dev/null
-
-    # Clean
-    ip link del "$IFACE" 2>/dev/null
-    ip fou del port "$FOU_PORT" 2>/dev/null
-
-    # FOU receiver
-    log_step "Setting up FOU on 127.0.0.1:${FOU_PORT}..."
-    ip fou add port "$FOU_PORT" ipproto 4
-
-    # IPIP tunnel (through localhost via udp2raw)
-    log_step "Creating IPIP tunnel..."
-    ip link add "$IFACE" type ipip \
-        remote 127.0.0.1 \
-        local 127.0.0.1 \
-        encap fou \
-        encap-sport auto \
-        encap-dport "$FOU_PORT"
-
-    ip addr add "${MY_IP}" peer "${PEER_IP}/32" dev "$IFACE"
-    ip link set "$IFACE" up mtu 1300
-
-    # udp2raw service
-    log_step "Creating udp2raw service..."
-    cat > "/etc/systemd/system/udp2raw-client-${TUN_ID}.service" <<EOF
-[Unit]
-Description=udp2raw Client ${TUN_ID} (${RAW_MODE}) + FOU
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=${UDP2RAW_BIN} -c -l 127.0.0.1:${FOU_PORT} -r ${REMOTE_IP}:${RAW_PORT} --raw-mode ${RAW_MODE} -a -k "${PASSWORD}"
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # IPIP service
-    cat > "/etc/systemd/system/ipip-u2r-${TUN_ID}.service" <<EOF
-[Unit]
-Description=IPIP over udp2raw ${TUN_ID}
-After=network.target udp2raw-client-${TUN_ID}.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStartPre=/sbin/modprobe fou
-ExecStartPre=/sbin/modprobe ipip
-ExecStartPre=-/sbin/ip link del ${IFACE}
-ExecStartPre=-/sbin/ip fou del port ${FOU_PORT}
-ExecStart=/bin/bash -c '\
-    ip fou add port ${FOU_PORT} ipproto 4 && \
-    ip link add ${IFACE} type ipip \
-        remote 127.0.0.1 local 127.0.0.1 \
-        encap fou encap-sport auto encap-dport ${FOU_PORT} && \
-    ip addr add ${MY_IP} peer ${PEER_IP}/32 dev ${IFACE} && \
-    ip link set ${IFACE} up mtu 1300'
-ExecStop=/sbin/ip link del ${IFACE}
-ExecStop=/sbin/ip fou del port ${FOU_PORT}
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable "udp2raw-client-${TUN_ID}" "ipip-u2r-${TUN_ID}"
-    systemctl restart "udp2raw-client-${TUN_ID}"
-
-    sleep 2
-    if systemctl is-active --quiet "udp2raw-client-${TUN_ID}"; then
-        log_info "udp2raw Client RUNNING"
-    else
-        log_err "udp2raw failed. Logs:"
-        journalctl -u "udp2raw-client-${TUN_ID}" -n 10 --no-pager
-    fi
-
-    echo ""
-    echo -e "${GREEN}============================================${NC}"
-    echo -e "${GREEN}  Full Client ready!${NC}"
-    echo -e "${GREEN}  Private IP : ${MY_IP}${NC}"
-    echo -e "${GREEN}  Peer IP    : ${PEER_IP}${NC}"
-    echo -e "${GREEN}============================================${NC}"
-    echo ""
-    echo -e "${YELLOW}  Test: ping ${PEER_IP}${NC}"
-    echo -e "${YELLOW}  Nginx upstream: ${PEER_IP}:PORT${NC}"
-}
-
-# ==========================================
 # Test
 # ==========================================
 test_tunnel() {
@@ -528,14 +269,6 @@ test_tunnel() {
     systemctl status "udp2raw-client-${TUN_ID}" --no-pager -l 2>/dev/null | head -5
 
     echo ""
-    echo -e "${CYAN}IPIP interfaces:${NC}"
-    ip -br addr show "ipip_u2r${TUN_ID}" 2>/dev/null || echo "  No IPIP interface"
-
-    echo ""
-    echo -e "${CYAN}FOU:${NC}"
-    ip fou show 2>/dev/null || echo "  No FOU"
-
-    echo ""
     echo -e "${CYAN}udp2raw logs (last 10):${NC}"
     for TYPE in server client; do
         SVC="udp2raw-${TYPE}-${TUN_ID}"
@@ -546,9 +279,9 @@ test_tunnel() {
     done
 
     echo ""
-    read -p "Ping peer IP [10.30.1.1]: " PING_IP
-    PING_IP=${PING_IP:-10.30.1.1}
-    ping -c 5 -W 3 "$PING_IP"
+    echo -e "${YELLOW}To test the UDP tunnel:${NC}"
+    echo "  Server: nc -u -l -p TARGET_PORT"
+    echo "  Client: echo 'test' | nc -u -w2 127.0.0.1 LOCAL_PORT"
 }
 
 # ==========================================
@@ -558,7 +291,7 @@ clean_tunnels() {
     echo ""
     echo -e "${YELLOW}=== REMOVE TUNNELS ===${NC}"
     echo ""
-    echo "This removes: services + IPIP + FOU (keeps udp2raw binary)"
+    echo "This removes: services + tunnels (keeps udp2raw binary)"
     read -p "Are you sure? (yes/NO): " confirm
     if [ "$confirm" != "yes" ]; then return; fi
 
@@ -576,6 +309,7 @@ clean_tunnels() {
     done
 
     ip fou del port 5555 2>/dev/null
+    ip fou del port 6000 2>/dev/null
     systemctl daemon-reload
 
     log_info "Tunnels removed (binary kept at ${UDP2RAW_BIN})"
@@ -603,22 +337,15 @@ full_uninstall() {
 # ==========================================
 clear
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  udp2raw Tunnel Manager v1.1${NC}"
+echo -e "${GREEN}  udp2raw Tunnel Manager v1.2${NC}"
 echo -e "${GREEN}  ICMP / UDP Mode${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
-echo "--- Simple (udp2raw only) ---"
 echo "1) Setup KHAREJ Server"
 echo "2) Setup IRAN Client"
-echo ""
-echo "--- Full Tunnel (udp2raw + IPIP + Private IP) ---"
-echo "3) Full Setup KHAREJ Server"
-echo "4) Full Setup IRAN Client"
-echo ""
-echo "--- Tools ---"
-echo "5) Test Connection"
-echo "6) Remove Tunnels (keep binary)"
-echo "7) Full Uninstall (remove all)"
+echo "3) Test Connection"
+echo "4) Remove Tunnels (keep binary)"
+echo "5) Full Uninstall (remove all)"
 echo "0) Exit"
 echo ""
 read -p "Select: " opt
@@ -626,10 +353,8 @@ read -p "Select: " opt
 case $opt in
     1) setup_server ;;
     2) setup_client ;;
-    3) setup_full_server ;;
-    4) setup_full_client ;;
-    5) test_tunnel ;;
-    6) clean_tunnels ;;
-    7) full_uninstall ;;
+    3) test_tunnel ;;
+    4) clean_tunnels ;;
+    5) full_uninstall ;;
     *) exit 0 ;;
 esac

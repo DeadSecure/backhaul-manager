@@ -1,46 +1,74 @@
 #!/bin/bash
 
-# Coloring
+# ==========================================
+#  Gost Tunnel Manager v3.0
+#  Supports: relay+ssh, relay+tls, relay+wss
+# ==========================================
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+NC='\033[0m'
 
-# Check root
+GOST_BIN="/usr/local/bin/gost"
+GOST_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
+
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}This script must be run as root${NC}" 
    exit 1
 fi
 
-# Function to install Gost
+# Function to install Gost (from GitHub, NOT apt)
 install_gost() {
-    if command -v gost &> /dev/null; then
-        echo -e "${GREEN}Gost is already installed.${NC}"
-        return
+    if [[ -f "$GOST_BIN" ]]; then
+        local ver=$($GOST_BIN -V 2>&1 | head -1)
+        echo -e "${GREEN}Gost already installed: ${ver}${NC}"
+        read -p "Reinstall? (y/N): " r
+        [[ ! $r =~ ^[Yy]$ ]] && return
     fi
     
-    echo -e "${YELLOW}Installing Gost...${NC}"
-    # Detect architecture
+    echo -e "${YELLOW}Installing Gost from GitHub...${NC}"
+    # Remove apt version if exists
+    apt remove -y gost 2>/dev/null
+    
     ARCH=$(uname -m)
     case $ARCH in
         x86_64)
-            GOST_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
+            DL_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
             ;;
         aarch64)
-            GOST_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-arm64-2.11.5.gz"
+            DL_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-arm64-2.11.5.gz"
             ;;
         *)
             echo -e "${RED}Unsupported architecture: $ARCH${NC}"
-            exit 1
+            return 1
             ;;
     esac
 
-    wget -O gost.gz "$GOST_URL"
-    gunzip gost.gz
-    chmod +x gost
-    mv gost /usr/local/bin/
-    echo -e "${GREEN}Gost installed successfully!${NC}"
+    wget -O /tmp/gost.gz "$DL_URL"
+    gunzip -f /tmp/gost.gz
+    chmod +x /tmp/gost
+    mv /tmp/gost "$GOST_BIN"
+    echo -e "${GREEN}Gost installed: $($GOST_BIN -V 2>&1 | head -1)${NC}"
+}
+
+# Protocol Selection
+select_protocol() {
+    echo ""
+    echo -e "${CYAN}Select Protocol:${NC}"
+    echo "  1) relay+tls   - TLS encryption [Recommended]"
+    echo "  2) relay+wss   - WebSocket Secure (looks like HTTPS)"
+    echo "  3) relay+ssh   - SSH tunnel"
+    echo ""
+    read -p "Protocol [1]: " proto_opt
+    case $proto_opt in
+        2) PROTOCOL="relay+wss" ;;
+        3) PROTOCOL="relay+ssh" ;;
+        *) PROTOCOL="relay+tls" ;;
+    esac
+    echo -e "${GREEN}Protocol: ${PROTOCOL}${NC}"
 }
 
 # Function to verify connection
@@ -166,34 +194,34 @@ generate_password() {
 
 # Server Setup (Kharej)
 setup_server() {
-    echo -e "${BLUE}--- Setup Server (Outside Iran) ---${NC}"
-    read -p "Enter Port for Tunnel (Default: 2222): " PORT
-    PORT=${PORT:-2222}
+    echo -e "${BLUE}═══════════════════════════════════════${NC}"
+    echo -e "${BLUE}  Setup Server (KHAREJ)${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════${NC}"
+    echo ""
+
+    select_protocol
+
+    read -p "Enter Port for Tunnel [8443]: " PORT
+    PORT=${PORT:-8443}
     
-    read -p "Enter Username (Default: admin): " USERNAME
+    read -p "Enter Username [admin]: " USERNAME
     USERNAME=${USERNAME:-admin}
     
     PASSWORD=$(generate_password)
     echo -e "${YELLOW}Generated Password: ${GREEN}$PASSWORD${NC}"
     read -p "Use this password or enter your own (Press Enter to keep): " INPUT_PASS
-    if [[ ! -z "$INPUT_PASS" ]]; then
-        PASSWORD=$INPUT_PASS
-    fi
-
-    # MTU Configuration
-    read -p "Enter MTU (Default: 140): " MTU
-    MTU=${MTU:-140}
+    [[ ! -z "$INPUT_PASS" ]] && PASSWORD=$INPUT_PASS
     
-    SERVICE_NAME="gost-ssh-server"
+    SERVICE_NAME="gost-server-${PORT}"
     
     cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
 [Unit]
-Description=Gost SSH Tunnel Server
+Description=Gost ${PROTOCOL} Server (port ${PORT})
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/gost -L "relay+ssh://$USERNAME:$PASSWORD@:$PORT"
+ExecStart=$GOST_BIN -L "${PROTOCOL}://${USERNAME}:${PASSWORD}@:${PORT}"
 Restart=always
 RestartSec=3
 StartLimitInterval=0
@@ -207,47 +235,82 @@ EOF
     systemctl enable $SERVICE_NAME
     systemctl restart $SERVICE_NAME
     
-    # Get IP
+    sleep 2
     IP=$(hostname -I | awk '{print $1}')
     
-    echo -e "${GREEN}Server Setup Complete!${NC}"
-    echo -e "----------------------------------------"
-    echo -e "Server IP: ${YELLOW}$IP${NC}"
-    echo -e "Port:      ${YELLOW}$PORT${NC}"
-    echo -e "User:      ${YELLOW}$USERNAME${NC}"
-    echo -e "Pass:      ${YELLOW}$PASSWORD${NC}"
-    echo -e "Protocol:  ${YELLOW}relay+ssh${NC}"
-    echo -e "MTU:       ${YELLOW}$MTU (Set on Client)${NC}"
-    echo -e "----------------------------------------"
-    echo -e "Copy these details for the client setup."
+    echo ""
+    echo -e "${GREEN}═══════════════════════════════════════${NC}"
+    echo -e "${GREEN}  Server Ready!${NC}"
+    echo -e "${GREEN}  IP       : ${IP}${NC}"
+    echo -e "${GREEN}  Port     : ${PORT}${NC}"
+    echo -e "${GREEN}  User     : ${USERNAME}${NC}"
+    echo -e "${GREEN}  Pass     : ${PASSWORD}${NC}"
+    echo -e "${GREEN}  Protocol : ${PROTOCOL}${NC}"
+    echo -e "${GREEN}  Service  : ${SERVICE_NAME}${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${YELLOW}Copy these for client setup!${NC}"
     read -p "Press Enter to continue..."
 }
 
 # Client Setup (Iran)
 setup_client() {
-    echo -e "${BLUE}--- Setup Client (Iran) ---${NC}"
-    echo "This will forward traffic from a local port to a destination port on the server side."
-    
-    read -p "Enter Server IP: " SERVER_IP
-    read -p "Enter Server Port (Tunnel Port, e.g. 2222): " SERVER_PORT
-    read -p "Enter Username: " USERNAME
-    read -p "Enter Password: " PASSWORD
-    
-    echo -e "\n${YELLOW}--- Forwarding Configuration ---${NC}"
-    read -p "Enter Local Listening Port (e.g. 5000): " LOCAL_PORT
-    read -p "Enter Destination IP:Port on Server (e.g. 127.0.0.1:3000): " DEST_ADDR
+    echo -e "${BLUE}═══════════════════════════════════════${NC}"
+    echo -e "${BLUE}  Setup Client (IRAN)${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════${NC}"
+    echo ""
 
-    # MTU Configuration
-    read -p "Enter MTU for connect (Default: 140): " MTU
-    MTU=${MTU:-140}
+    select_protocol
 
-    SERVICE_NAME="gost-ssh-client-$LOCAL_PORT"
+    read -p "Server IP: " SERVER_IP
+    [[ -z "$SERVER_IP" ]] && { echo -e "${RED}IP required${NC}"; return; }
+
+    read -p "Server Port [8443]: " SERVER_PORT
+    SERVER_PORT=${SERVER_PORT:-8443}
+
+    read -p "Username [admin]: " USERNAME
+    USERNAME=${USERNAME:-admin}
+
+    read -p "Password: " PASSWORD
+    [[ -z "$PASSWORD" ]] && { echo -e "${RED}Password required${NC}"; return; }
     
-    EXEC_CMD="/usr/local/bin/gost -L tcp://:$LOCAL_PORT/$DEST_ADDR -L udp://:$LOCAL_PORT/$DEST_ADDR -F \"relay+ssh://$USERNAME:$PASSWORD@$SERVER_IP:$SERVER_PORT?mtu=$MTU\""
+    echo ""
+    echo -e "${CYAN}PORT FORWARDING${NC}"
+    echo -e "  ${YELLOW}Local${NC}  = Port on this Iran server"
+    echo -e "  ${YELLOW}Remote${NC} = Port on Kharej server"
+    echo ""
 
-    cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
+    local MAPS=""
+    local MAP_COUNT=0
+    local SERVICES_LIST=""
+
+    while true; do
+        read -p "Local port (or Enter to finish): " LOCAL_PORT
+        [[ -z "$LOCAL_PORT" ]] && break
+
+        read -p "Remote destination [127.0.0.1:${LOCAL_PORT}]: " DEST_ADDR
+        DEST_ADDR=${DEST_ADDR:-127.0.0.1:${LOCAL_PORT}}
+
+        read -p "Protocol (tcp/udp/both) [both]: " FWD_PROTO
+        FWD_PROTO=${FWD_PROTO:-both}
+
+        SERVICE_NAME="gost-client-${LOCAL_PORT}"
+
+        case $FWD_PROTO in
+            tcp)
+                EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${SERVER_IP}:${SERVER_PORT}\""
+                ;;
+            udp)
+                EXEC_CMD="$GOST_BIN -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${SERVER_IP}:${SERVER_PORT}\""
+                ;;
+            *)
+                EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${SERVER_IP}:${SERVER_PORT}\""
+                ;;
+        esac
+
+        cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
 [Unit]
-Description=Gost SSH Forwarding Client ($LOCAL_PORT -> $DEST_ADDR)
+Description=Gost ${PROTOCOL} Client (${LOCAL_PORT} -> ${DEST_ADDR})
 After=network.target
 
 [Service]
@@ -262,47 +325,92 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable $SERVICE_NAME
-    systemctl restart $SERVICE_NAME
-    
-    echo -e "${GREEN}Client Setup Complete!${NC}"
-    echo -e "Traffic on Local Port ${YELLOW}$LOCAL_PORT${NC} is now forwarded to ${YELLOW}$DEST_ADDR${NC} via the tunnel."
-    echo -e "Using UDP & TCP."
-    
-    # Ask for Watchdog Auto-Setup
-    read -p "Do you want to enable Auto-Reconnect Watchdog? (y/n): " WD
-    if [[ "$WD" == "y" ]]; then
-         # Manually invoke watchdog logic for this service
-         WATCHDOG_SCRIPT="/usr/local/bin/watchdog-$SERVICE_NAME.sh"
-         cat <<EOF > \$WATCHDOG_SCRIPT
-#!/bin/bash
-IS_ACTIVE=\$(systemctl is-active $SERVICE_NAME)
-if [ "\$IS_ACTIVE" != "active" ]; then
-    systemctl restart $SERVICE_NAME
-    exit 0
-fi
-nc -z -w 5 127.0.0.1 $LOCAL_PORT
-if [ \$? -ne 0 ]; then
-    systemctl restart $SERVICE_NAME
-fi
-EOF
-        chmod +x \$WATCHDOG_SCRIPT
-        CRON_CMD="* * * * * \$WATCHDOG_SCRIPT >> /var/log/gost-watchdog.log 2>&1"
-        (crontab -l 2>/dev/null | grep -v "\$WATCHDOG_SCRIPT"; echo "\$CRON_CMD") | crontab -
-        echo -e "${GREEN}Watchdog enabled.${NC}"
+        systemctl daemon-reload
+        systemctl enable $SERVICE_NAME > /dev/null 2>&1
+        systemctl restart $SERVICE_NAME
+
+        MAP_COUNT=$((MAP_COUNT + 1))
+        SERVICES_LIST="${SERVICES_LIST}  ${LOCAL_PORT} -> ${DEST_ADDR} (${FWD_PROTO})\n"
+        echo -e "  ${GREEN}Added: ${LOCAL_PORT} -> ${DEST_ADDR} (${FWD_PROTO})${NC}"
+    done
+
+    if [[ $MAP_COUNT -eq 0 ]]; then
+        echo -e "${RED}No port mappings added${NC}"
+        return
     fi
 
+    # Watchdog
+    read -p "Enable Auto-Reconnect Watchdog? (y/N): " WD
+    if [[ "$WD" =~ ^[Yy]$ ]]; then
+        for svc_file in /etc/systemd/system/gost-client-*.service; do
+            [[ ! -f "$svc_file" ]] && continue
+            local svc_name=$(basename "$svc_file" .service)
+            local port=$(echo "$svc_name" | sed 's/gost-client-//')
+            local wd_script="/usr/local/bin/watchdog-${svc_name}.sh"
+
+            cat > "$wd_script" <<WDEOF
+#!/bin/bash
+IS_ACTIVE=\$(systemctl is-active $svc_name)
+if [ "\$IS_ACTIVE" != "active" ]; then
+    systemctl restart $svc_name
+    exit 0
+fi
+nc -z -w 5 127.0.0.1 $port
+if [ \$? -ne 0 ]; then
+    systemctl restart $svc_name
+fi
+WDEOF
+            chmod +x "$wd_script"
+            CRON_CMD="* * * * * $wd_script >> /var/log/gost-watchdog.log 2>&1"
+            (crontab -l 2>/dev/null | grep -v "$wd_script"; echo "$CRON_CMD") | crontab -
+        done
+        echo -e "${GREEN}Watchdog enabled for all ports${NC}"
+    fi
+
+    echo ""
+    echo -e "${GREEN}═══════════════════════════════════════${NC}"
+    echo -e "${GREEN}  Client Ready!${NC}"
+    echo -e "${GREEN}  Server   : ${SERVER_IP}:${SERVER_PORT}${NC}"
+    echo -e "${GREEN}  Protocol : ${PROTOCOL}${NC}"
+    echo -e "${GREEN}  Mappings : ${MAP_COUNT}${NC}"
+    printf "$SERVICES_LIST"
+    echo -e "${GREEN}═══════════════════════════════════════${NC}"
     read -p "Press Enter to continue..."
 }
 
+# ==========================================
+# List / Status
+# ==========================================
+list_tunnels() {
+    echo ""
+    echo -e "${CYAN}CONFIGURED TUNNELS${NC}"
+    echo ""
+
+    local found=false
+    for f in /etc/systemd/system/gost-server-*.service /etc/systemd/system/gost-client-*.service /etc/systemd/system/gost-ssh-*.service /etc/systemd/system/gost-tls-*.service; do
+        [[ ! -f "$f" ]] && continue
+        found=true
+        local svc=$(basename "$f" .service)
+        local status=$(systemctl is-active "$svc" 2>/dev/null)
+        if [[ "$status" == "active" ]]; then
+            echo -e "  ${GREEN}[ON]${NC}  $svc"
+        else
+            echo -e "  ${RED}[OFF]${NC} $svc"
+        fi
+    done
+
+    $found || echo -e "  ${YELLOW}No tunnels configured${NC}"
+    echo ""
+    read -p "Press Enter to continue..."
+}
+
+# ==========================================
+# Uninstall
+# ==========================================
 uninstall_menu() {
     echo -e "${BLUE}--- Uninstall Service ---${NC}"
     
-    # List all gost services
-    echo "Found services:"
-    # Use grep to find services starting with gost-ssh-
-    SERVICES=$(ls /etc/systemd/system/gost-ssh-*.service 2>/dev/null)
+    SERVICES=$(ls /etc/systemd/system/gost-*.service 2>/dev/null)
     
     if [ -z "$SERVICES" ]; then
         echo -e "${RED}No Gost services found.${NC}"
@@ -310,59 +418,102 @@ uninstall_menu() {
         return
     fi
     
+    echo "Found services:"
     i=1
     declare -A SERVICE_MAP
     for svc_path in $SERVICES; do
         svc_name=$(basename "$svc_path" .service)
-        echo "$i) $svc_name"
+        local status=$(systemctl is-active "$svc_name" 2>/dev/null)
+        if [[ "$status" == "active" ]]; then
+            echo -e "  $i) ${GREEN}[ON]${NC}  $svc_name"
+        else
+            echo -e "  $i) ${RED}[OFF]${NC} $svc_name"
+        fi
         SERVICE_MAP[$i]=$svc_name
         i=$((i+1))
     done
-    echo "0) Cancel"
+    echo "  A) Uninstall ALL"
+    echo "  0) Cancel"
     
-    read -p "Select service to uninstall: " CHOICE
+    read -p "Select: " CHOICE
     
-    if [ "$CHOICE" == "0" ]; then
-        return
-    fi
-    
-    SVC=${SERVICE_MAP[$CHOICE]}
-    
-    if [ ! -z "$SVC" ]; then
-        systemctl stop $SVC
-        systemctl disable $SVC
-        rm /etc/systemd/system/$SVC.service
-        
-        # Remove watchdog if exists
-        WD_SCRIPT="/usr/local/bin/watchdog-$SVC.sh"
-        if [ -f "$WD_SCRIPT" ]; then
-            rm "$WD_SCRIPT"
-            # Remove from cron
-            crontab -l | grep -v "$WD_SCRIPT" | crontab -
-            echo "Watchdog removed."
-        fi
-        
+    [[ "$CHOICE" == "0" ]] && return
+
+    if [[ "$CHOICE" =~ ^[Aa]$ ]]; then
+        read -p "Remove ALL Gost services? (yes/NO): " c
+        [[ "$c" != "yes" ]] && return
+        for svc_path in $SERVICES; do
+            local svc=$(basename "$svc_path" .service)
+            systemctl stop "$svc" 2>/dev/null
+            systemctl disable "$svc" 2>/dev/null
+            rm -f "$svc_path"
+            rm -f "/usr/local/bin/watchdog-${svc}.sh"
+        done
         systemctl daemon-reload
-        echo -e "${GREEN}Service '$SVC' removed successfully.${NC}"
+        echo -e "${GREEN}All services removed${NC}"
     else
-         echo "Invalid choice."
+        SVC=${SERVICE_MAP[$CHOICE]}
+        if [ ! -z "$SVC" ]; then
+            systemctl stop $SVC
+            systemctl disable $SVC
+            rm -f "/etc/systemd/system/$SVC.service"
+            rm -f "/usr/local/bin/watchdog-$SVC.sh"
+            crontab -l 2>/dev/null | grep -v "watchdog-$SVC" | crontab - 2>/dev/null
+            systemctl daemon-reload
+            echo -e "${GREEN}Service '$SVC' removed${NC}"
+        else
+            echo "Invalid choice."
+        fi
     fi
     read -p "Press Enter to continue..."
 }
 
+# ==========================================
+# Full Uninstall
+# ==========================================
+full_uninstall() {
+    echo -e "${RED}FULL UNINSTALL${NC}"
+    echo "Removes: all services + gost binary + watchdogs"
+    read -p "Are you sure? (yes/NO): " c
+    [[ "$c" != "yes" ]] && return
 
+    for f in /etc/systemd/system/gost-*.service; do
+        [[ ! -f "$f" ]] && continue
+        local svc=$(basename "$f" .service)
+        systemctl stop "$svc" 2>/dev/null
+        systemctl disable "$svc" 2>/dev/null
+        rm -f "$f"
+        rm -f "/usr/local/bin/watchdog-${svc}.sh"
+    done
+
+    rm -f "$GOST_BIN"
+    crontab -l 2>/dev/null | grep -v "gost-watchdog" | crontab - 2>/dev/null
+    systemctl daemon-reload
+
+    echo -e "${GREEN}Everything removed!${NC}"
+    exit 0
+}
+
+# ==========================================
 # Main Menu
+# ==========================================
 while true; do
     clear
-    echo -e "${BLUE}=== Gost SSH+Relay Tunnel Manager (Port Forwarding & MTU) ===${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════${NC}"
+    echo -e "${GREEN}  Gost Tunnel Manager v3.0${NC}"
+    echo -e "${GREEN}  relay+tls / relay+wss / relay+ssh${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════${NC}"
+    echo ""
     echo "1) Install Gost"
-    echo "2) Setup Server (Kharej / Destination)"
-    echo "3) Setup Client (Iran / Origin) - Port Forwarding"
-    echo "4) Uninstall Service"
-    echo "5) Check Connection / Status"
-    echo "6) Setup Watchdog (Auto Reconnect)"
+    echo "2) Setup Server (Kharej)"
+    echo "3) Setup Client (Iran) + Port Forwarding"
+    echo "4) List Tunnels / Status"
+    echo "5) Check Connection"
+    echo "6) Uninstall Service"
+    echo "7) Full Uninstall"
     echo "0) Exit"
-    read -p "Select option: " OPTION
+    echo ""
+    read -p "Select: " OPTION
 
     case $OPTION in
         1)
@@ -378,14 +529,17 @@ while true; do
             setup_client
             ;;
         4)
-            uninstall_menu
+            list_tunnels
             ;;
         5)
             check_connection
             ;;
         6)
-           setup_watchdog
-           ;;
+            uninstall_menu
+            ;;
+        7)
+            full_uninstall
+            ;;
         0)
             exit 0
             ;;

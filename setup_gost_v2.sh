@@ -60,12 +60,14 @@ select_protocol() {
     echo -e "${CYAN}Select Protocol:${NC}"
     echo "  1) relay+tls   - TLS encryption [Recommended]"
     echo "  2) relay+wss   - WebSocket Secure (looks like HTTPS)"
-    echo "  3) relay+ssh   - SSH tunnel"
+    echo "  3) relay+grpc  - gRPC (HTTP/2 + TLS)"
+    echo "  4) relay+ssh   - SSH tunnel"
     echo ""
     read -p "Protocol [1]: " proto_opt
     case $proto_opt in
         2) PROTOCOL="relay+wss" ;;
-        3) PROTOCOL="relay+ssh" ;;
+        3) PROTOCOL="relay+grpc" ;;
+        4) PROTOCOL="relay+ssh" ;;
         *) PROTOCOL="relay+tls" ;;
     esac
     echo -e "${GREEN}Protocol: ${PROTOCOL}${NC}"

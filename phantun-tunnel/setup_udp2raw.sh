@@ -552,13 +552,13 @@ test_tunnel() {
 }
 
 # ==========================================
-# Clean All
+# Remove Tunnels (keep binary)
 # ==========================================
-clean_all() {
+clean_tunnels() {
     echo ""
-    echo -e "${RED}=== CLEAN ALL udp2raw ===${NC}"
+    echo -e "${YELLOW}=== REMOVE TUNNELS ===${NC}"
     echo ""
-    echo "This removes: udp2raw services + IPIP + FOU + binary"
+    echo "This removes: services + IPIP + FOU (keeps udp2raw binary)"
     read -p "Are you sure? (yes/NO): " confirm
     if [ "$confirm" != "yes" ]; then return; fi
 
@@ -576,10 +576,26 @@ clean_all() {
     done
 
     ip fou del port 5555 2>/dev/null
-    rm -f "$UDP2RAW_BIN"
     systemctl daemon-reload
 
-    log_info "Everything cleaned!"
+    log_info "Tunnels removed (binary kept at ${UDP2RAW_BIN})"
+}
+
+# ==========================================
+# Full Uninstall (remove everything + binary)
+# ==========================================
+full_uninstall() {
+    echo ""
+    echo -e "${RED}=== FULL UNINSTALL ===${NC}"
+    echo ""
+    echo "This removes EVERYTHING: tunnels + udp2raw binary"
+    read -p "Are you sure? (yes/NO): " confirm
+    if [ "$confirm" != "yes" ]; then return; fi
+
+    clean_tunnels
+    rm -f "$UDP2RAW_BIN"
+
+    log_info "Everything removed including binary!"
 }
 
 # ==========================================
@@ -587,7 +603,7 @@ clean_all() {
 # ==========================================
 clear
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  udp2raw Tunnel Manager v1.0${NC}"
+echo -e "${GREEN}  udp2raw Tunnel Manager v1.1${NC}"
 echo -e "${GREEN}  ICMP / UDP Mode${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
@@ -601,7 +617,8 @@ echo "4) Full Setup IRAN Client"
 echo ""
 echo "--- Tools ---"
 echo "5) Test Connection"
-echo "6) Clean Everything"
+echo "6) Remove Tunnels (keep binary)"
+echo "7) Full Uninstall (remove all)"
 echo "0) Exit"
 echo ""
 read -p "Select: " opt
@@ -612,6 +629,7 @@ case $opt in
     3) setup_full_server ;;
     4) setup_full_client ;;
     5) test_tunnel ;;
-    6) clean_all ;;
+    6) clean_tunnels ;;
+    7) full_uninstall ;;
     *) exit 0 ;;
 esac

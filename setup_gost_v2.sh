@@ -502,12 +502,12 @@ EOF
 
 # ==========================================
 # Batch Client Setup (Iran)
-#   Paste server IPs, enter creds once
-#   Auto-creates tunnels for each IP
+#   Load Balanced: all ports across all IPs
 # ==========================================
 batch_client() {
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
     echo -e "${BLUE}  BATCH Client Setup (IRAN)${NC}"
+    echo -e "${BLUE}  Load Balanced across all IPs${NC}"
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
     echo ""
 
@@ -530,9 +530,9 @@ batch_client() {
     [[ -z "$PASSWORD" ]] && { echo -e "${RED}Password required${NC}"; return; }
 
     echo ""
-    echo -e "${CYAN}Forward Ports (one per IP, space separated):${NC}"
-    echo -e "  You have ${#REMOTE_IPS[@]} IPs, enter ${#REMOTE_IPS[@]} ports."
-    echo -e "  Example: 3031 3032 3033 3034 3035 3036"
+    echo -e "${CYAN}Forward Ports (space separated):${NC}"
+    echo -e "  All ports will be load-balanced across ALL ${#REMOTE_IPS[@]} IPs"
+    echo -e "  Example: 3031 3032"
     read -p "> " -a FWD_PORTS
 
     if [ ${#FWD_PORTS[@]} -eq 0 ]; then
@@ -540,34 +540,41 @@ batch_client() {
         return
     fi
 
-    # If fewer ports than IPs, auto-fill remaining with increments
-    while [ ${#FWD_PORTS[@]} -lt ${#REMOTE_IPS[@]} ]; do
-        local last_port=${FWD_PORTS[-1]}
-        FWD_PORTS+=($((last_port + 1)))
-    done
-
-    echo ""
-    echo -e "${CYAN}Tunnel mapping:${NC}"
+    # Build -F chain: all IPs comma-separated
+    local IP_CHAIN=""
     for i in "${!REMOTE_IPS[@]}"; do
-        echo -e "  :${FWD_PORTS[$i]} -> ${REMOTE_IPS[$i]}"
+        if [ $i -eq 0 ]; then
+            IP_CHAIN="${REMOTE_IPS[$i]}:${SERVER_PORT}"
+        else
+            IP_CHAIN="${IP_CHAIN},${REMOTE_IPS[$i]}:${SERVER_PORT}"
+        fi
     done
+
+    # Build -L flags: one per port
+    local L_FLAGS=""
+    for port in "${FWD_PORTS[@]}"; do
+        L_FLAGS="${L_FLAGS} -L tcp://:${port}/127.0.0.1:${port} -L udp://:${port}/127.0.0.1:${port}"
+    done
+
+    # Build full command
+    EXEC_CMD="$GOST_BIN${L_FLAGS} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${IP_CHAIN}?strategy=round&maxFails=3&failTimeout=30s\""
+
+    # Show summary
     echo ""
-    echo -e "${YELLOW}Creating ${#REMOTE_IPS[@]} tunnel(s)...${NC}"
+    echo -e "${CYAN}Load Balance Config:${NC}"
+    echo -e "  Strategy : round-robin"
+    echo -e "  IPs      : ${#REMOTE_IPS[@]}"
+    for ip in "${REMOTE_IPS[@]}"; do
+        echo -e "    - $ip"
+    done
+    echo -e "  Ports    : ${FWD_PORTS[*]}"
     echo ""
 
-    local total=0
+    SERVICE_NAME="gost-client-lb"
 
-    for ip_idx in "${!REMOTE_IPS[@]}"; do
-        REMOTE_IP=${REMOTE_IPS[$ip_idx]}
-        LOCAL_PORT=${FWD_PORTS[$ip_idx]}
-        DEST_ADDR="127.0.0.1:${LOCAL_PORT}"
-
-        SERVICE_NAME="gost-client-${LOCAL_PORT}"
-        EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${REMOTE_IP}:${SERVER_PORT}\""
-
-        cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
+    cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
 [Unit]
-Description=Gost Client (:${LOCAL_PORT} -> ${REMOTE_IP})
+Description=Gost LB Client (${FWD_PORTS[*]} -> ${#REMOTE_IPS[@]} IPs)
 After=network.target
 
 [Service]
@@ -582,59 +589,50 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-        systemctl daemon-reload
-        systemctl enable $SERVICE_NAME > /dev/null 2>&1
-        systemctl restart $SERVICE_NAME
+    systemctl daemon-reload
+    systemctl enable $SERVICE_NAME > /dev/null 2>&1
+    systemctl restart $SERVICE_NAME
 
-        echo -e "  ${GREEN}[OK]${NC} :${LOCAL_PORT} -> ${REMOTE_IP}"
-        total=$((total + 1))
-    done
+    sleep 1
+    local status=$(systemctl is-active "$SERVICE_NAME" 2>/dev/null)
 
-    # Watchdog
+    # Watchdog for LB service
     echo ""
-    read -p "Enable Watchdog for all tunnels? (y/N): " WD
+    read -p "Enable Watchdog? (y/N): " WD
     if [[ "$WD" =~ ^[Yy]$ ]]; then
-        for svc_file in /etc/systemd/system/gost-client-*.service; do
-            [[ ! -f "$svc_file" ]] && continue
-            local svc_name=$(basename "$svc_file" .service)
-            local port=$(echo "$svc_name" | sed 's/gost-client-//')
-            local wd_script="/usr/local/bin/watchdog-${svc_name}.sh"
-            [[ -f "$wd_script" ]] && continue
+        local FIRST_PORT=${FWD_PORTS[0]}
+        local wd_script="/usr/local/bin/watchdog-${SERVICE_NAME}.sh"
 
-            cat > "$wd_script" <<WDEOF
+        cat > "$wd_script" <<WDEOF
 #!/bin/bash
-LOG_PREFIX="[\$(date '+%Y-%m-%d %H:%M:%S')] [$svc_name]"
-TARGET="https://www.google.com"
+LOG_PREFIX="[\$(date '+%Y-%m-%d %H:%M:%S')] [$SERVICE_NAME]"
 
-IS_ACTIVE=\$(systemctl is-active $svc_name)
+IS_ACTIVE=\$(systemctl is-active $SERVICE_NAME)
 if [ "\$IS_ACTIVE" != "active" ]; then
     echo "\$LOG_PREFIX Service down. Restarting..."
-    systemctl restart $svc_name
+    systemctl restart $SERVICE_NAME
     exit 0
 fi
 
-curl -s --connect-timeout 5 --max-time 10 -x socks5h://127.0.0.1:$port \$TARGET > /dev/null 2>&1
-if [ \$? -eq 0 ]; then exit 0; fi
-
-curl -s --connect-timeout 5 --max-time 10 -x http://127.0.0.1:$port \$TARGET > /dev/null 2>&1
-if [ \$? -eq 0 ]; then exit 0; fi
-
-nc -z -w 5 127.0.0.1 $port 2>/dev/null
+nc -z -w 5 127.0.0.1 $FIRST_PORT 2>/dev/null
 if [ \$? -ne 0 ]; then
-    echo "\$LOG_PREFIX All checks failed. Restarting..."
-    systemctl restart $svc_name
+    echo "\$LOG_PREFIX Port $FIRST_PORT not responding. Restarting..."
+    systemctl restart $SERVICE_NAME
 fi
 WDEOF
-            chmod +x "$wd_script"
-            CRON_CMD="* * * * * $wd_script >> /var/log/gost-watchdog.log 2>&1"
-            (crontab -l 2>/dev/null | grep -v "$wd_script"; echo "$CRON_CMD") | crontab -
-        done
-        echo -e "${GREEN}Watchdog enabled for all client tunnels${NC}"
+        chmod +x "$wd_script"
+        CRON_CMD="* * * * * $wd_script >> /var/log/gost-watchdog.log 2>&1"
+        (crontab -l 2>/dev/null | grep -v "$wd_script"; echo "$CRON_CMD") | crontab -
+        echo -e "${GREEN}Watchdog enabled${NC}"
     fi
 
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Done! ${total} tunnel(s) created${NC}"
+    echo -e "${GREEN}  Load Balanced Client Ready! (${status})${NC}"
+    echo -e "${GREEN}  Ports    : ${FWD_PORTS[*]}${NC}"
+    echo -e "${GREEN}  IPs      : ${#REMOTE_IPS[@]}${NC}"
+    echo -e "${GREEN}  Strategy : round-robin${NC}"
+    echo -e "${GREEN}  Service  : ${SERVICE_NAME}${NC}"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     read -p "Press Enter to continue..."
 }

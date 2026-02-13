@@ -415,89 +415,53 @@ WDEOF
 }
 
 # ==========================================
-# Batch Server Setup (Kharej - Multiple IPs)
+# Batch Server Setup (Kharej)
+#   Creates ONE Gost service on 0.0.0.0
+#   Outputs copy-paste string for client
 # ==========================================
 batch_server() {
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
     echo -e "${BLUE}  BATCH Server Setup (KHAREJ)${NC}"
-    echo -e "${BLUE}  One Gost listener per IP${NC}"
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
     echo ""
 
     # Detect all public IPs
-    local available_ips=($(ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1))
+    local ALL_IPS=($(ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1))
     
-    if [ ${#available_ips[@]} -eq 0 ]; then
+    if [ ${#ALL_IPS[@]} -eq 0 ]; then
         echo -e "${RED}No public IPs found on this server!${NC}"
         read -p "Press Enter to continue..."
         return
     fi
 
-    echo -e "${CYAN}Available IPs on this server:${NC}"
-    for i in "${!available_ips[@]}"; do
-        echo "  $((i+1))) ${available_ips[$i]}"
+    echo -e "${CYAN}Detected ${#ALL_IPS[@]} IP(s) on this server:${NC}"
+    for ip in "${ALL_IPS[@]}"; do
+        echo "  - $ip"
     done
     echo ""
 
-    echo "A) Use ALL IPs"
-    echo "C) Custom selection (e.g. '1 3 5')"
-    read -p "Select [A]: " ip_opt
-
-    local SELECTED_IPS=()
-    if [[ "$ip_opt" =~ ^[cC]$ ]]; then
-        read -p "Enter IP numbers (space separated): " ip_nums
-        for num in $ip_nums; do
-            if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -ge 1 ] && [ "$num" -le "${#available_ips[@]}" ]; then
-                SELECTED_IPS+=("${available_ips[$((num-1))]}")
-            fi
-        done
-    else
-        SELECTED_IPS=("${available_ips[@]}")
-    fi
-
-    if [ ${#SELECTED_IPS[@]} -eq 0 ]; then
-        echo -e "${RED}No IPs selected!${NC}"
-        return
-    fi
-
-    echo -e "${GREEN}Selected ${#SELECTED_IPS[@]} IPs${NC}"
-
-    read -p "Base Port [8443]: " BASE_PORT
-    BASE_PORT=${BASE_PORT:-8443}
+    read -p "Port [8443]: " PORT
+    PORT=${PORT:-8443}
 
     read -p "Username [admin]: " USERNAME
     USERNAME=${USERNAME:-admin}
 
     PASSWORD=$(generate_password)
     echo -e "${YELLOW}Generated Password: ${GREEN}$PASSWORD${NC}"
-    read -p "Use this password or enter your own (Enter to keep): " INPUT_PASS
+    read -p "Use this or enter your own (Enter to keep): " INPUT_PASS
     [[ ! -z "$INPUT_PASS" ]] && PASSWORD=$INPUT_PASS
 
-    read -p "Same port on all IPs? or increment? (same/incr) [same]: " port_mode
-    port_mode=${port_mode:-same}
+    # Create ONE service on 0.0.0.0 (listens on all IPs)
+    SERVICE_NAME="gost-server-${PORT}"
 
-    echo ""
-    echo -e "${YELLOW}Installing ${#SELECTED_IPS[@]} server(s)...${NC}"
-    echo ""
-
-    local idx=0
-    for SERVER_IP in "${SELECTED_IPS[@]}"; do
-        if [[ "$port_mode" == "incr" ]]; then
-            CURRENT_PORT=$((BASE_PORT + idx))
-        else
-            CURRENT_PORT=$BASE_PORT
-        fi
-
-        SERVICE_NAME="gost-server-${CURRENT_PORT}-$(echo $SERVER_IP | tr '.' '-')"
-
-        cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
+    cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
 [Unit]
-Description=Gost relay+ssh Server ($SERVER_IP:$CURRENT_PORT)
+Description=Gost relay+ssh Server (0.0.0.0:${PORT})
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=$GOST_BIN -L "${PROTOCOL}://${USERNAME}:${PASSWORD}@${SERVER_IP}:${CURRENT_PORT}"
+ExecStart=$GOST_BIN -L "${PROTOCOL}://${USERNAME}:${PASSWORD}@:${PORT}"
 Restart=always
 RestartSec=3
 StartLimitInterval=0
@@ -507,44 +471,56 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-        systemctl daemon-reload
-        systemctl enable $SERVICE_NAME > /dev/null 2>&1
-        systemctl restart $SERVICE_NAME
+    systemctl daemon-reload
+    systemctl enable $SERVICE_NAME > /dev/null 2>&1
+    systemctl restart $SERVICE_NAME
 
-        echo -e "  ${GREEN}[OK]${NC} $SERVER_IP:$CURRENT_PORT -> $SERVICE_NAME"
-        idx=$((idx + 1))
-    done
+    sleep 1
+    local status=$(systemctl is-active "$SERVICE_NAME" 2>/dev/null)
+
+    # Build copy-paste string: all IPs space-separated
+    local IP_STRING="${ALL_IPS[*]}"
 
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  ${#SELECTED_IPS[@]} Server(s) Ready!${NC}"
-    echo -e "${GREEN}  Username : ${USERNAME}${NC}"
-    echo -e "${GREEN}  Password : ${PASSWORD}${NC}"
-    echo -e "${GREEN}  Protocol : ${PROTOCOL}${NC}"
+    echo -e "${GREEN}  Server Ready! (${status})${NC}"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     echo ""
-    echo -e "${YELLOW}Copy the password for client setup!${NC}"
+    echo -e "${YELLOW}---- COPY THIS FOR CLIENT SETUP ----${NC}"
+    echo ""
+    echo -e "${CYAN}IPs:${NC}"
+    echo -e "${GREEN}${IP_STRING}${NC}"
+    echo ""
+    echo -e "${CYAN}Port:${NC}     ${PORT}"
+    echo -e "${CYAN}Username:${NC} ${USERNAME}"
+    echo -e "${CYAN}Password:${NC} ${PASSWORD}"
+    echo ""
+    echo -e "${YELLOW}------------------------------------${NC}"
+    echo ""
     read -p "Press Enter to continue..."
 }
 
 # ==========================================
-# Batch Client Setup (Iran - Multiple Remote IPs)
+# Batch Client Setup (Iran)
+#   Paste server IPs, enter creds once
+#   Auto-creates tunnels for each IP
 # ==========================================
 batch_client() {
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
     echo -e "${BLUE}  BATCH Client Setup (IRAN)${NC}"
-    echo -e "${BLUE}  Connect to multiple Kharej IPs${NC}"
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
     echo ""
 
-    read -p "Enter Remote Server IPs (space separated): " -a REMOTE_IPS
+    echo -e "${CYAN}Paste the server IPs (space separated):${NC}"
+    read -p "> " -a REMOTE_IPS
     if [ ${#REMOTE_IPS[@]} -eq 0 ]; then
         echo -e "${RED}No IPs entered!${NC}"
         return
     fi
-    echo -e "${GREEN}${#REMOTE_IPS[@]} remote IP(s) entered${NC}"
+    echo -e "${GREEN}${#REMOTE_IPS[@]} remote IP(s) received${NC}"
+    echo ""
 
-    read -p "Server Port (same for all) [8443]: " SERVER_PORT
+    read -p "Server Port [8443]: " SERVER_PORT
     SERVER_PORT=${SERVER_PORT:-8443}
 
     read -p "Username [admin]: " USERNAME
@@ -554,9 +530,9 @@ batch_client() {
     [[ -z "$PASSWORD" ]] && { echo -e "${RED}Password required${NC}"; return; }
 
     echo ""
-    echo -e "${CYAN}PORT FORWARDING CONFIG${NC}"
-    echo -e "  You define port mappings ONCE, they apply to ALL remote IPs."
-    echo -e "  Each remote IP gets its own set of ports (auto-offset)."
+    echo -e "${CYAN}PORT FORWARDING${NC}"
+    echo -e "  Define port mapping(s). Each IP gets its own local port (auto +100)."
+    echo -e "  Example: base port 3031 -> IP1=3031, IP2=3131, IP3=3231 ..."
     echo ""
 
     local -a FWD_LOCAL_PORTS=()
@@ -577,7 +553,7 @@ batch_client() {
         FWD_DEST_ADDRS+=("$DA")
         FWD_PROTOS+=("$FP")
 
-        echo -e "  ${GREEN}Added: :${LP} -> ${DA} (${FP})${NC}"
+        echo -e "  ${GREEN}+${NC} :${LP} -> ${DA} (${FP})"
     done
 
     if [ ${#FWD_LOCAL_PORTS[@]} -eq 0 ]; then
@@ -586,17 +562,16 @@ batch_client() {
     fi
 
     echo ""
-    echo -e "${YELLOW}Installing tunnels for ${#REMOTE_IPS[@]} server(s) x ${#FWD_LOCAL_PORTS[@]} port(s)...${NC}"
+    echo -e "${YELLOW}Creating ${#REMOTE_IPS[@]} x ${#FWD_LOCAL_PORTS[@]} = $(( ${#REMOTE_IPS[@]} * ${#FWD_LOCAL_PORTS[@]} )) tunnel(s)...${NC}"
     echo ""
 
     local total=0
 
     for ip_idx in "${!REMOTE_IPS[@]}"; do
         REMOTE_IP=${REMOTE_IPS[$ip_idx]}
-        echo -e "${CYAN}--- Server: $REMOTE_IP ---${NC}"
+        echo -e "${CYAN}--- ${REMOTE_IP} ---${NC}"
 
         for fwd_idx in "${!FWD_LOCAL_PORTS[@]}"; do
-            # Auto-offset: first server uses base port, second adds 100, etc.
             LOCAL_PORT=$(( ${FWD_LOCAL_PORTS[$fwd_idx]} + (ip_idx * 100) ))
             DEST_ADDR=${FWD_DEST_ADDRS[$fwd_idx]}
             FWD_PROTO=${FWD_PROTOS[$fwd_idx]}
@@ -617,7 +592,7 @@ batch_client() {
 
             cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
 [Unit]
-Description=Gost relay+ssh Client (${LOCAL_PORT} -> ${REMOTE_IP}:${DEST_ADDR})
+Description=Gost Client (${LOCAL_PORT} -> ${REMOTE_IP}:${DEST_ADDR})
 After=network.target
 
 [Service]
@@ -636,22 +611,20 @@ EOF
             systemctl enable $SERVICE_NAME > /dev/null 2>&1
             systemctl restart $SERVICE_NAME
 
-            echo -e "  ${GREEN}[OK]${NC} :${LOCAL_PORT} -> ${REMOTE_IP} -> ${DEST_ADDR} (${FWD_PROTO})"
+            echo -e "  ${GREEN}[OK]${NC} :${LOCAL_PORT} -> ${REMOTE_IP} -> ${DEST_ADDR}"
             total=$((total + 1))
         done
     done
 
-    # Watchdog for all
+    # Watchdog
     echo ""
-    read -p "Enable Watchdog for all new tunnels? (y/N): " WD
+    read -p "Enable Watchdog for all tunnels? (y/N): " WD
     if [[ "$WD" =~ ^[Yy]$ ]]; then
         for svc_file in /etc/systemd/system/gost-client-*.service; do
             [[ ! -f "$svc_file" ]] && continue
             local svc_name=$(basename "$svc_file" .service)
             local port=$(echo "$svc_name" | sed 's/gost-client-//')
             local wd_script="/usr/local/bin/watchdog-${svc_name}.sh"
-
-            # Skip if watchdog already exists
             [[ -f "$wd_script" ]] && continue
 
             cat > "$wd_script" <<WDEOF
@@ -682,15 +655,12 @@ WDEOF
             CRON_CMD="* * * * * $wd_script >> /var/log/gost-watchdog.log 2>&1"
             (crontab -l 2>/dev/null | grep -v "$wd_script"; echo "$CRON_CMD") | crontab -
         done
-        echo -e "${GREEN}Watchdog enabled for all client ports${NC}"
+        echo -e "${GREEN}Watchdog enabled for all client tunnels${NC}"
     fi
 
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Batch Client Ready!${NC}"
-    echo -e "${GREEN}  Remote IPs : ${#REMOTE_IPS[@]}${NC}"
-    echo -e "${GREEN}  Total Tunnels : ${total}${NC}"
-    echo -e "${GREEN}  Protocol : ${PROTOCOL}${NC}"
+    echo -e "${GREEN}  Done! ${total} tunnel(s) created${NC}"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     read -p "Press Enter to continue..."
 }

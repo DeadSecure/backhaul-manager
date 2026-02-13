@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ==========================================
-#  Gost SSH Tunnel Manager v5.0
-#  Protocol: relay+ssh | Batch Support
+#  Gost SSH Tunnel Manager v6.0
+#  Gost v3 (go-gost) | relay+ssh | Batch
 # ==========================================
 
 RED='\033[0;31m'
@@ -31,16 +31,20 @@ install_gost() {
         [[ ! $r =~ ^[Yy]$ ]] && return
     fi
     
-    echo -e "${YELLOW}Installing Gost from GitHub...${NC}"
+    echo -e "${YELLOW}Installing Gost v3 from GitHub (go-gost)...${NC}"
     apt remove -y gost 2>/dev/null
     
+    GOST_VERSION="3.2.6"
     ARCH=$(uname -m)
     case $ARCH in
         x86_64)
-            DL_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
+            DL_URL="https://github.com/go-gost/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_amd64.tar.gz"
             ;;
         aarch64)
-            DL_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-arm64-2.11.5.gz"
+            DL_URL="https://github.com/go-gost/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_arm64.tar.gz"
+            ;;
+        armv7l)
+            DL_URL="https://github.com/go-gost/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_armv7.tar.gz"
             ;;
         *)
             echo -e "${RED}Unsupported architecture: $ARCH${NC}"
@@ -49,11 +53,12 @@ install_gost() {
     esac
 
     mkdir -p /usr/local/bin
-    wget -O /tmp/gost.gz "$DL_URL"
-    gunzip -f /tmp/gost.gz
+    wget -O /tmp/gost.tar.gz "$DL_URL"
+    tar -xzf /tmp/gost.tar.gz -C /tmp/ gost
     chmod +x /tmp/gost
     mv /tmp/gost "$GOST_BIN"
-    echo -e "${GREEN}Gost installed: $($GOST_BIN -V 2>&1 | head -1)${NC}"
+    rm -f /tmp/gost.tar.gz
+    echo -e "${GREEN}Gost v3 installed: $($GOST_BIN -V 2>&1 | head -1)${NC}"
 }
 
 # ==========================================
@@ -314,13 +319,13 @@ setup_client() {
 
         case $FWD_PROTO in
             tcp)
-                EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${SERVER_IP}:${SERVER_PORT}?mtu=140\""
+                EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${SERVER_IP}:${SERVER_PORT}\""
                 ;;
             udp)
-                EXEC_CMD="$GOST_BIN -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${SERVER_IP}:${SERVER_PORT}?mtu=140\""
+                EXEC_CMD="$GOST_BIN -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${SERVER_IP}:${SERVER_PORT}\""
                 ;;
             *)
-                EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${SERVER_IP}:${SERVER_PORT}?mtu=140\""
+                EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${SERVER_IP}:${SERVER_PORT}\""
                 ;;
         esac
 
@@ -600,13 +605,13 @@ batch_client() {
 
             case $FWD_PROTO in
                 tcp)
-                    EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${REMOTE_IP}:${SERVER_PORT}?mtu=140\""
+                    EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${REMOTE_IP}:${SERVER_PORT}\""
                     ;;
                 udp)
-                    EXEC_CMD="$GOST_BIN -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${REMOTE_IP}:${SERVER_PORT}?mtu=140\""
+                    EXEC_CMD="$GOST_BIN -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${REMOTE_IP}:${SERVER_PORT}\""
                     ;;
                 *)
-                    EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${REMOTE_IP}:${SERVER_PORT}?mtu=140\""
+                    EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${REMOTE_IP}:${SERVER_PORT}\""
                     ;;
             esac
 
@@ -814,8 +819,8 @@ full_uninstall() {
 while true; do
     clear
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Gost SSH Tunnel Manager v5.0${NC}"
-    echo -e "${GREEN}  Protocol: relay+ssh | Batch Support${NC}"
+    echo -e "${GREEN}  Gost SSH Tunnel Manager v6.0${NC}"
+    echo -e "${GREEN}  Gost v3 (go-gost) | relay+ssh | Batch${NC}"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     echo ""
     echo -e "${CYAN}--- Single Setup ---${NC}"

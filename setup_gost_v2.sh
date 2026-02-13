@@ -530,69 +530,44 @@ batch_client() {
     [[ -z "$PASSWORD" ]] && { echo -e "${RED}Password required${NC}"; return; }
 
     echo ""
-    echo -e "${CYAN}PORT FORWARDING${NC}"
-    echo -e "  Define port mapping(s). Each IP gets its own local port (auto +100)."
-    echo -e "  Example: base port 3031 -> IP1=3031, IP2=3131, IP3=3231 ..."
-    echo ""
+    echo -e "${CYAN}Forward Ports (one per IP, space separated):${NC}"
+    echo -e "  You have ${#REMOTE_IPS[@]} IPs, enter ${#REMOTE_IPS[@]} ports."
+    echo -e "  Example: 3031 3032 3033 3034 3035 3036"
+    read -p "> " -a FWD_PORTS
 
-    local -a FWD_LOCAL_PORTS=()
-    local -a FWD_DEST_ADDRS=()
-    local -a FWD_PROTOS=()
-
-    while true; do
-        read -p "Local base port (or Enter to finish): " LP
-        [[ -z "$LP" ]] && break
-
-        read -p "Remote destination [127.0.0.1:${LP}]: " DA
-        DA=${DA:-127.0.0.1:${LP}}
-
-        read -p "Protocol (tcp/udp/both) [both]: " FP
-        FP=${FP:-both}
-
-        FWD_LOCAL_PORTS+=("$LP")
-        FWD_DEST_ADDRS+=("$DA")
-        FWD_PROTOS+=("$FP")
-
-        echo -e "  ${GREEN}+${NC} :${LP} -> ${DA} (${FP})"
-    done
-
-    if [ ${#FWD_LOCAL_PORTS[@]} -eq 0 ]; then
-        echo -e "${RED}No port mappings defined!${NC}"
+    if [ ${#FWD_PORTS[@]} -eq 0 ]; then
+        echo -e "${RED}No ports entered!${NC}"
         return
     fi
 
+    # If fewer ports than IPs, auto-fill remaining with increments
+    while [ ${#FWD_PORTS[@]} -lt ${#REMOTE_IPS[@]} ]; do
+        local last_port=${FWD_PORTS[-1]}
+        FWD_PORTS+=($((last_port + 1)))
+    done
+
     echo ""
-    echo -e "${YELLOW}Creating ${#REMOTE_IPS[@]} x ${#FWD_LOCAL_PORTS[@]} = $(( ${#REMOTE_IPS[@]} * ${#FWD_LOCAL_PORTS[@]} )) tunnel(s)...${NC}"
+    echo -e "${CYAN}Tunnel mapping:${NC}"
+    for i in "${!REMOTE_IPS[@]}"; do
+        echo -e "  :${FWD_PORTS[$i]} -> ${REMOTE_IPS[$i]}"
+    done
+    echo ""
+    echo -e "${YELLOW}Creating ${#REMOTE_IPS[@]} tunnel(s)...${NC}"
     echo ""
 
     local total=0
 
     for ip_idx in "${!REMOTE_IPS[@]}"; do
         REMOTE_IP=${REMOTE_IPS[$ip_idx]}
-        echo -e "${CYAN}--- ${REMOTE_IP} ---${NC}"
+        LOCAL_PORT=${FWD_PORTS[$ip_idx]}
+        DEST_ADDR="127.0.0.1:${LOCAL_PORT}"
 
-        for fwd_idx in "${!FWD_LOCAL_PORTS[@]}"; do
-            LOCAL_PORT=$(( ${FWD_LOCAL_PORTS[$fwd_idx]} + (ip_idx * 100) ))
-            DEST_ADDR=${FWD_DEST_ADDRS[$fwd_idx]}
-            FWD_PROTO=${FWD_PROTOS[$fwd_idx]}
+        SERVICE_NAME="gost-client-${LOCAL_PORT}"
+        EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${REMOTE_IP}:${SERVER_PORT}\""
 
-            SERVICE_NAME="gost-client-${LOCAL_PORT}"
-
-            case $FWD_PROTO in
-                tcp)
-                    EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${REMOTE_IP}:${SERVER_PORT}\""
-                    ;;
-                udp)
-                    EXEC_CMD="$GOST_BIN -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${REMOTE_IP}:${SERVER_PORT}\""
-                    ;;
-                *)
-                    EXEC_CMD="$GOST_BIN -L tcp://:${LOCAL_PORT}/${DEST_ADDR} -L udp://:${LOCAL_PORT}/${DEST_ADDR} -F \"${PROTOCOL}://${USERNAME}:${PASSWORD}@${REMOTE_IP}:${SERVER_PORT}\""
-                    ;;
-            esac
-
-            cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
+        cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
 [Unit]
-Description=Gost Client (${LOCAL_PORT} -> ${REMOTE_IP}:${DEST_ADDR})
+Description=Gost Client (:${LOCAL_PORT} -> ${REMOTE_IP})
 After=network.target
 
 [Service]
@@ -607,13 +582,12 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-            systemctl daemon-reload
-            systemctl enable $SERVICE_NAME > /dev/null 2>&1
-            systemctl restart $SERVICE_NAME
+        systemctl daemon-reload
+        systemctl enable $SERVICE_NAME > /dev/null 2>&1
+        systemctl restart $SERVICE_NAME
 
-            echo -e "  ${GREEN}[OK]${NC} :${LOCAL_PORT} -> ${REMOTE_IP} -> ${DEST_ADDR}"
-            total=$((total + 1))
-        done
+        echo -e "  ${GREEN}[OK]${NC} :${LOCAL_PORT} -> ${REMOTE_IP}"
+        total=$((total + 1))
     done
 
     # Watchdog

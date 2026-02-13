@@ -160,7 +160,12 @@ setup_watchdog() {
     # If not, it restarts the service.
     cat <<EOF > $WATCHDOG_SCRIPT
 #!/bin/bash
-# Check if service is active
+# Watchdog for $SVC
+# Checks connectivity using curl (SOCKS5/HTTP) with nc fallback
+
+TARGET="https://www.google.com"
+
+# 1. Check if service is active at system level
 IS_ACTIVE=\$(systemctl is-active $SVC)
 if [ "\$IS_ACTIVE" != "active" ]; then
     echo "Service $SVC is not active. Restarting..."
@@ -168,14 +173,29 @@ if [ "\$IS_ACTIVE" != "active" ]; then
     exit 0
 fi
 
-# Check connection (TCP connect)
-nc -z -w 5 127.0.0.1 $PORT
-if [ \$? -ne 0 ]; then
-    echo "Port $PORT is not reachable. Restarting tunnel..."
-    systemctl restart $SVC
-else
-    echo "Tunnel $SVC on port $PORT is healthy."
+# 2. Try SOCKS5 Proxy Check
+curl -s --connect-timeout 5 --max-time 10 -x socks5h://127.0.0.1:$PORT \$TARGET > /dev/null
+if [ \$? -eq 0 ]; then
+    echo "SOCKS5 connection to \$TARGET successful."
+    exit 0
 fi
+
+# 3. Try HTTP Proxy Check
+curl -s --connect-timeout 5 --max-time 10 -x http://127.0.0.1:$PORT \$TARGET > /dev/null
+if [ \$? -eq 0 ]; then
+    echo "HTTP connection to \$TARGET successful."
+    exit 0
+fi
+
+# 4. Fallback: Simple TCP Port Check (in case it's a raw tunnel)
+nc -z -w 5 127.0.0.1 $PORT
+if [ \$? -eq 0 ]; then
+    echo "Port $PORT is open (TCP only). Assuming healthy."
+    exit 0
+fi
+
+echo "All checks failed. Restarting service..."
+systemctl restart $SVC
 EOF
     
     chmod +x $WATCHDOG_SCRIPT
@@ -352,11 +372,22 @@ EOF
 
             cat > "$wd_script" <<WDEOF
 #!/bin/bash
+TARGET="https://www.google.com"
 IS_ACTIVE=\$(systemctl is-active $svc_name)
 if [ "\$IS_ACTIVE" != "active" ]; then
     systemctl restart $svc_name
     exit 0
 fi
+
+# SOCKS5 Check
+curl -s --connect-timeout 5 --max-time 10 -x socks5h://127.0.0.1:$port \$TARGET > /dev/null
+if [ \$? -eq 0 ]; then exit 0; fi
+
+# HTTP Check
+curl -s --connect-timeout 5 --max-time 10 -x http://127.0.0.1:$port \$TARGET > /dev/null
+if [ \$? -eq 0 ]; then exit 0; fi
+
+# TCP Fallback
 nc -z -w 5 127.0.0.1 $port
 if [ \$? -ne 0 ]; then
     systemctl restart $svc_name

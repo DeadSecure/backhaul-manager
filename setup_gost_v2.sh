@@ -570,7 +570,7 @@ batch_client() {
     echo -e "  Ports    : ${FWD_PORTS[*]}"
     echo ""
 
-    SERVICE_NAME="gost-client-lb"
+    SERVICE_NAME="gost-client-lb-${FWD_PORTS[0]}"
 
     cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
 [Unit]

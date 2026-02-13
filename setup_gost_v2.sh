@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ==========================================
-#  Gost Tunnel Manager v3.0
-#  Supports: relay+ssh, relay+tls, relay+wss
+#  Gost SSH Tunnel Manager v4.0
+#  Protocol: relay+ssh (fixed)
 # ==========================================
 
 RED='\033[0;31m'
@@ -13,14 +13,16 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 GOST_BIN="/usr/local/bin/gost"
-GOST_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
+PROTOCOL="relay+ssh"
 
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}This script must be run as root${NC}" 
    exit 1
 fi
 
-# Function to install Gost (from GitHub, NOT apt)
+# ==========================================
+# Install Gost (from GitHub binary)
+# ==========================================
 install_gost() {
     if [[ -f "$GOST_BIN" ]]; then
         local ver=$($GOST_BIN -V 2>&1 | head -1)
@@ -30,7 +32,6 @@ install_gost() {
     fi
     
     echo -e "${YELLOW}Installing Gost from GitHub...${NC}"
-    # Remove apt version if exists
     apt remove -y gost 2>/dev/null
     
     ARCH=$(uname -m)
@@ -47,6 +48,7 @@ install_gost() {
             ;;
     esac
 
+    mkdir -p /usr/local/bin
     wget -O /tmp/gost.gz "$DL_URL"
     gunzip -f /tmp/gost.gz
     chmod +x /tmp/gost
@@ -54,77 +56,77 @@ install_gost() {
     echo -e "${GREEN}Gost installed: $($GOST_BIN -V 2>&1 | head -1)${NC}"
 }
 
-# Protocol Selection
-select_protocol() {
-    echo ""
-    echo -e "${CYAN}Select Protocol:${NC}"
-    echo "  1) relay+tls   - TLS encryption [Recommended]"
-    echo "  2) relay+wss   - WebSocket Secure (looks like HTTPS)"
-    echo "  3) relay+grpc  - gRPC (HTTP/2 + TLS)"
-    echo "  4) relay+ssh   - SSH tunnel"
-    echo ""
-    read -p "Protocol [1]: " proto_opt
-    case $proto_opt in
-        2) PROTOCOL="relay+wss" ;;
-        3) PROTOCOL="relay+grpc" ;;
-        4) PROTOCOL="relay+ssh" ;;
-        *) PROTOCOL="relay+tls" ;;
-    esac
-    echo -e "${GREEN}Protocol: ${PROTOCOL}${NC}"
+# ==========================================
+# Generate random password
+# ==========================================
+generate_password() {
+    < /dev/urandom tr -dc A-Za-z0-9 | head -c 16
 }
 
-# Function to verify connection
+# ==========================================
+# Check Connection (FIXED: searches correct service names)
+# ==========================================
 check_connection() {
     echo -e "${BLUE}--- Check Tunnel Connection ---${NC}"
     
-    # 1. Check services status
     echo -e "${YELLOW}Checking Systemd Services...${NC}"
-    SERVICES=$(systemctl list-units --type=service --state=running | grep "gost-ssh-")
+    SERVICES=$(systemctl list-units --type=service --state=running | grep -E "gost-(server|client)-")
     
     if [ -z "$SERVICES" ]; then
         echo -e "${RED}No running Gost services found!${NC}"
         read -p "Press Enter to continue..."
         return
-    else
-        echo -e "${GREEN}Running Services:${NC}"
-        echo "$SERVICES"
     fi
+
+    echo -e "${GREEN}Running Services:${NC}"
+    echo "$SERVICES"
     
-    # 2. Check listening ports
+    # Check listening ports
     echo -e "\n${YELLOW}Checking Listening Ports...${NC}"
-    # Extract ports from running services or just show all gost ports
-    if command -v netstat &> /dev/null; then
-        netstat -tunlp | grep gost
-    else
+    if command -v ss &> /dev/null; then
         ss -tunlp | grep gost
+    elif command -v netstat &> /dev/null; then
+        netstat -tunlp | grep gost
     fi
     
-    # 3. Simple connectivity test
+    # Connectivity test via curl
     echo -e "\n${YELLOW}Testing Connectivity...${NC}"
-    read -p "Enter local port to test (e.g. 1080 or 5000): " TEST_PORT
+    read -p "Enter local port to test (or Enter to skip): " TEST_PORT
     if [[ ! -z "$TEST_PORT" ]]; then
-        echo -e "Testing via SOCKS5..."
-        RESPONSE=$(curl -x socks5h://127.0.0.1:$TEST_PORT -s --connect-timeout 5 https://api.ipify.org)
+        echo -e "Testing TCP connection to port ${TEST_PORT}..."
         
-        if [[ ! -z "$RESPONSE" ]]; then
-             echo -e "${GREEN}SOCKS5 Test Passed! Your IP: $RESPONSE${NC}"
+        # Method 1: Direct TCP check
+        if nc -z -w 5 127.0.0.1 $TEST_PORT 2>/dev/null; then
+            echo -e "${GREEN}TCP port $TEST_PORT is OPEN${NC}"
         else
-             echo -e "${RED}SOCKS5 Test Failed. (This is expected if port is not a SOCKS proxy)${NC}"
-             
-             echo -e "Testing via HTTP/Forward..."
-             nc -z -v -w5 127.0.0.1 $TEST_PORT
+            echo -e "${RED}TCP port $TEST_PORT is CLOSED${NC}"
+        fi
+
+        # Method 2: curl through tunnel (if it acts as proxy)
+        echo -e "Testing data transfer via curl..."
+        RESPONSE=$(curl -s --connect-timeout 5 --max-time 10 -x socks5h://127.0.0.1:$TEST_PORT https://api.ipify.org 2>/dev/null)
+        if [[ ! -z "$RESPONSE" ]]; then
+             echo -e "${GREEN}SOCKS5 Proxy Test OK! Remote IP: $RESPONSE${NC}"
+        else
+             RESPONSE=$(curl -s --connect-timeout 5 --max-time 10 -x http://127.0.0.1:$TEST_PORT https://api.ipify.org 2>/dev/null)
+             if [[ ! -z "$RESPONSE" ]]; then
+                 echo -e "${GREEN}HTTP Proxy Test OK! Remote IP: $RESPONSE${NC}"
+             else
+                 echo -e "${YELLOW}Proxy test skipped (port is likely a raw forward, not a proxy)${NC}"
+             fi
         fi
     fi
     
     read -p "Press Enter to continue..."
 }
 
-# Function to create Watchdog
+# ==========================================
+# Setup Watchdog (FIXED: searches correct service names)
+# ==========================================
 setup_watchdog() {
     echo -e "${BLUE}--- Setup Auto-Reconnect Watchdog ---${NC}"
     
-    # Check for installed client services
-    SERVICES=$(ls /etc/systemd/system/gost-ssh-client-*.service 2>/dev/null)
+    SERVICES=$(ls /etc/systemd/system/gost-client-*.service 2>/dev/null)
     if [ -z "$SERVICES" ]; then
          echo -e "${RED}No Gost Client services found to monitor.${NC}"
          read -p "Press Enter to continue..."
@@ -134,10 +136,10 @@ setup_watchdog() {
     echo "Select service to monitor:"
     i=1
     declare -A SERVICE_MAP
+    declare -A PORT_MAP
     for svc_path in $SERVICES; do
         svc_name=$(basename "$svc_path" .service)
-        # Extract port from name gost-ssh-client-PORT
-        PORT=$(echo "$svc_name" | awk -F'-' '{print $4}')
+        PORT=$(echo "$svc_name" | sed 's/gost-client-//')
         echo "$i) $svc_name (Port: $PORT)"
         SERVICE_MAP[$i]=$svc_name
         PORT_MAP[$i]=$PORT
@@ -145,7 +147,7 @@ setup_watchdog() {
     done
     echo "0) Cancel"
     
-    read -p "Select options: " OPTION
+    read -p "Select: " OPTION
     if [ "$OPTION" == "0" ]; then return; fi
     
     SVC=${SERVICE_MAP[$OPTION]}
@@ -155,73 +157,66 @@ setup_watchdog() {
     
     WATCHDOG_SCRIPT="/usr/local/bin/watchdog-$SVC.sh"
     
-    # Create monitoring script
-    # It checks if port is listening AND if we can connect to it.
-    # If not, it restarts the service.
     cat <<EOF > $WATCHDOG_SCRIPT
 #!/bin/bash
-# Watchdog for $SVC
-# Checks connectivity using curl (SOCKS5/HTTP) with nc fallback
+# Watchdog for $SVC (port $PORT)
+# Checks: systemd status -> curl SOCKS5 -> curl HTTP -> nc TCP
 
+LOG_PREFIX="[\$(date '+%Y-%m-%d %H:%M:%S')] [$SVC]"
 TARGET="https://www.google.com"
 
-# 1. Check if service is active at system level
+# 1. Check systemd service status
 IS_ACTIVE=\$(systemctl is-active $SVC)
 if [ "\$IS_ACTIVE" != "active" ]; then
-    echo "Service $SVC is not active. Restarting..."
+    echo "\$LOG_PREFIX Service is not active. Restarting..."
     systemctl restart $SVC
     exit 0
 fi
 
-# 2. Try SOCKS5 Proxy Check
-curl -s --connect-timeout 5 --max-time 10 -x socks5h://127.0.0.1:$PORT \$TARGET > /dev/null
+# 2. SOCKS5 Proxy Check
+curl -s --connect-timeout 5 --max-time 10 -x socks5h://127.0.0.1:$PORT \$TARGET > /dev/null 2>&1
 if [ \$? -eq 0 ]; then
-    echo "SOCKS5 connection to \$TARGET successful."
+    echo "\$LOG_PREFIX SOCKS5 check passed."
     exit 0
 fi
 
-# 3. Try HTTP Proxy Check
-curl -s --connect-timeout 5 --max-time 10 -x http://127.0.0.1:$PORT \$TARGET > /dev/null
+# 3. HTTP Proxy Check
+curl -s --connect-timeout 5 --max-time 10 -x http://127.0.0.1:$PORT \$TARGET > /dev/null 2>&1
 if [ \$? -eq 0 ]; then
-    echo "HTTP connection to \$TARGET successful."
+    echo "\$LOG_PREFIX HTTP check passed."
     exit 0
 fi
 
-# 4. Fallback: Simple TCP Port Check (in case it's a raw tunnel)
-nc -z -w 5 127.0.0.1 $PORT
+# 4. TCP Port Check (raw forward)
+nc -z -w 5 127.0.0.1 $PORT 2>/dev/null
 if [ \$? -eq 0 ]; then
-    echo "Port $PORT is open (TCP only). Assuming healthy."
+    echo "\$LOG_PREFIX TCP port open. Assuming healthy."
     exit 0
 fi
 
-echo "All checks failed. Restarting service..."
+echo "\$LOG_PREFIX All checks FAILED. Restarting service..."
 systemctl restart $SVC
 EOF
     
     chmod +x $WATCHDOG_SCRIPT
     
-    # Add to crontab if not exists
+    # Add to crontab (replace if exists)
     CRON_CMD="* * * * * $WATCHDOG_SCRIPT >> /var/log/gost-watchdog.log 2>&1"
     (crontab -l 2>/dev/null | grep -v "$WATCHDOG_SCRIPT"; echo "$CRON_CMD") | crontab -
     
-    echo -e "${GREEN}Watchdog installed!${NC}"
-    echo -e "It will check the connection every minute and restart if down."
+    echo -e "${GREEN}Watchdog installed for $SVC!${NC}"
+    echo -e "Checks every minute. Logs: /var/log/gost-watchdog.log"
     read -p "Press Enter to continue..."
 }
 
-# Function to generate random password
-generate_password() {
-    < /dev/urandom tr -dc A-Za-z0-9 | head -c 16
-}
-
+# ==========================================
 # Server Setup (Kharej)
+# ==========================================
 setup_server() {
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
-    echo -e "${BLUE}  Setup Server (KHAREJ)${NC}"
+    echo -e "${BLUE}  Setup Server (KHAREJ) - relay+ssh${NC}"
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
     echo ""
-
-    select_protocol
 
     read -p "Enter Port for Tunnel [8443]: " PORT
     PORT=${PORT:-8443}
@@ -238,7 +233,7 @@ setup_server() {
     
     cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
 [Unit]
-Description=Gost ${PROTOCOL} Server (port ${PORT})
+Description=Gost relay+ssh Server (port ${PORT})
 After=network.target
 
 [Service]
@@ -275,14 +270,14 @@ EOF
     read -p "Press Enter to continue..."
 }
 
+# ==========================================
 # Client Setup (Iran)
+# ==========================================
 setup_client() {
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
-    echo -e "${BLUE}  Setup Client (IRAN)${NC}"
+    echo -e "${BLUE}  Setup Client (IRAN) - relay+ssh${NC}"
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
     echo ""
-
-    select_protocol
 
     read -p "Server IP: " SERVER_IP
     [[ -z "$SERVER_IP" ]] && { echo -e "${RED}IP required${NC}"; return; }
@@ -302,7 +297,6 @@ setup_client() {
     echo -e "  ${YELLOW}Remote${NC} = Port on Kharej server"
     echo ""
 
-    local MAPS=""
     local MAP_COUNT=0
     local SERVICES_LIST=""
 
@@ -332,7 +326,7 @@ setup_client() {
 
         cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
 [Unit]
-Description=Gost ${PROTOCOL} Client (${LOCAL_PORT} -> ${DEST_ADDR})
+Description=Gost relay+ssh Client (${LOCAL_PORT} -> ${DEST_ADDR})
 After=network.target
 
 [Service]
@@ -372,24 +366,28 @@ EOF
 
             cat > "$wd_script" <<WDEOF
 #!/bin/bash
+LOG_PREFIX="[\$(date '+%Y-%m-%d %H:%M:%S')] [$svc_name]"
 TARGET="https://www.google.com"
+
 IS_ACTIVE=\$(systemctl is-active $svc_name)
 if [ "\$IS_ACTIVE" != "active" ]; then
+    echo "\$LOG_PREFIX Service down. Restarting..."
     systemctl restart $svc_name
     exit 0
 fi
 
 # SOCKS5 Check
-curl -s --connect-timeout 5 --max-time 10 -x socks5h://127.0.0.1:$port \$TARGET > /dev/null
+curl -s --connect-timeout 5 --max-time 10 -x socks5h://127.0.0.1:$port \$TARGET > /dev/null 2>&1
 if [ \$? -eq 0 ]; then exit 0; fi
 
 # HTTP Check
-curl -s --connect-timeout 5 --max-time 10 -x http://127.0.0.1:$port \$TARGET > /dev/null
+curl -s --connect-timeout 5 --max-time 10 -x http://127.0.0.1:$port \$TARGET > /dev/null 2>&1
 if [ \$? -eq 0 ]; then exit 0; fi
 
 # TCP Fallback
-nc -z -w 5 127.0.0.1 $port
+nc -z -w 5 127.0.0.1 $port 2>/dev/null
 if [ \$? -ne 0 ]; then
+    echo "\$LOG_PREFIX All checks failed. Restarting..."
     systemctl restart $svc_name
 fi
 WDEOF
@@ -397,7 +395,7 @@ WDEOF
             CRON_CMD="* * * * * $wd_script >> /var/log/gost-watchdog.log 2>&1"
             (crontab -l 2>/dev/null | grep -v "$wd_script"; echo "$CRON_CMD") | crontab -
         done
-        echo -e "${GREEN}Watchdog enabled for all ports${NC}"
+        echo -e "${GREEN}Watchdog enabled for all client ports${NC}"
     fi
 
     echo ""
@@ -412,7 +410,7 @@ WDEOF
 }
 
 # ==========================================
-# List / Status
+# List / Status (FIXED: correct service patterns)
 # ==========================================
 list_tunnels() {
     echo ""
@@ -420,7 +418,7 @@ list_tunnels() {
     echo ""
 
     local found=false
-    for f in /etc/systemd/system/gost-server-*.service /etc/systemd/system/gost-client-*.service /etc/systemd/system/gost-ssh-*.service /etc/systemd/system/gost-tls-*.service; do
+    for f in /etc/systemd/system/gost-server-*.service /etc/systemd/system/gost-client-*.service; do
         [[ ! -f "$f" ]] && continue
         found=true
         local svc=$(basename "$f" .service)
@@ -481,6 +479,8 @@ uninstall_menu() {
             systemctl disable "$svc" 2>/dev/null
             rm -f "$svc_path"
             rm -f "/usr/local/bin/watchdog-${svc}.sh"
+            # Clean crontab entry
+            crontab -l 2>/dev/null | grep -v "watchdog-${svc}" | crontab - 2>/dev/null
         done
         systemctl daemon-reload
         echo -e "${GREEN}All services removed${NC}"
@@ -506,7 +506,7 @@ uninstall_menu() {
 # ==========================================
 full_uninstall() {
     echo -e "${RED}FULL UNINSTALL${NC}"
-    echo "Removes: all services + gost binary + watchdogs"
+    echo "Removes: all services + gost binary + watchdogs + cron entries"
     read -p "Are you sure? (yes/NO): " c
     [[ "$c" != "yes" ]] && return
 
@@ -520,7 +520,7 @@ full_uninstall() {
     done
 
     rm -f "$GOST_BIN"
-    crontab -l 2>/dev/null | grep -v "gost-watchdog" | crontab - 2>/dev/null
+    crontab -l 2>/dev/null | grep -v "gost-watchdog\|watchdog-gost" | crontab - 2>/dev/null
     systemctl daemon-reload
 
     echo -e "${GREEN}Everything removed!${NC}"
@@ -533,8 +533,8 @@ full_uninstall() {
 while true; do
     clear
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Gost Tunnel Manager v3.0${NC}"
-    echo -e "${GREEN}  relay+tls / relay+wss / relay+ssh${NC}"
+    echo -e "${GREEN}  Gost SSH Tunnel Manager v4.0${NC}"
+    echo -e "${GREEN}  Protocol: relay+ssh${NC}"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     echo ""
     echo "1) Install Gost"
@@ -542,8 +542,9 @@ while true; do
     echo "3) Setup Client (Iran) + Port Forwarding"
     echo "4) List Tunnels / Status"
     echo "5) Check Connection"
-    echo "6) Uninstall Service"
-    echo "7) Full Uninstall"
+    echo "6) Setup Watchdog (Auto-Reconnect)"
+    echo "7) Uninstall Service"
+    echo "8) Full Uninstall"
     echo "0) Exit"
     echo ""
     read -p "Select: " OPTION
@@ -568,9 +569,12 @@ while true; do
             check_connection
             ;;
         6)
-            uninstall_menu
+            setup_watchdog
             ;;
         7)
+            uninstall_menu
+            ;;
+        8)
             full_uninstall
             ;;
         0)

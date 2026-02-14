@@ -1,254 +1,317 @@
 #!/bin/bash
 
 # ==========================================
-#  GREtap Tunnel Manager v1.0
-#  Based on setup_gost_v2.sh style
+# GREtap Tunnel Manager v2.0 (Pro Edition)
+# Style: Inspired by ssh-network-manager
+# Features: Smart Watchdog, Auto-Repair, Systemd Integration
 # ==========================================
 
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-if [[ $EUID -ne 0 ]]; then
-   echo -e "${RED}This script must be run as root${NC}" 
-   exit 1
+# Logging Functions
+log() { echo -e "${CYAN}[$(date +'%H:%M:%S')]${NC} $1"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; }
+success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+
+# Check Root
+if [ "$EUID" -ne 0 ]; then
+    error "Please run as root"
+    exit 1
 fi
 
 # ==========================================
-# Check Prerequisites
+# 1. FIX & REPAIR FUNCTION
 # ==========================================
-check_prereqs() {
-    if ! lsmod | grep -q "ip_gre"; then
-        echo -e "${YELLOW}Loading 'ip_gre' kernel module...${NC}"
-        modprobe ip_gre
-        if [ $? -eq 0 ]; then
-            echo "ip_gre" > /etc/modules-load.d/ip_gre.conf
-            echo -e "${GREEN}Module loaded.${NC}"
-        else
-            echo -e "${RED}Failed to load ip_gre module!${NC}"
-        fi
+fix_services() {
+    echo -e "\n${YELLOW}--- Starting Service Repair (Fix Mode) ---${NC}"
+    
+    # 1. Reload Systemd
+    log "Reloading systemd daemon..."
+    systemctl daemon-reload
+    
+    # 2. Restart/Fix Tunnels
+    log "Scanning for GREtap services..."
+    SERVICES=$(ls /etc/systemd/system/gretap-*.service 2>/dev/null)
+    
+    if [ -z "$SERVICES" ]; then
+        log "No GREtap services found to fix."
+    else
+        for svc_path in $SERVICES; do
+            svc_name=$(basename "$svc_path" .service)
+            # Extract ID from name (gretap-1.service -> 1)
+            ID=$(echo "$svc_name" | sed 's/gretap-//')
+            
+            log "Fixing Tunnel ${ID} ($svc_name)..."
+            
+            # Restart Main Service
+            systemctl restart "$svc_name"
+            
+            # Restart Watchdog (if exists)
+            if [ -f "/etc/systemd/system/gretap-keepalive-${ID}.service" ]; then
+                log "  Restarting Watchdog for Tunnel ${ID}..."
+                systemctl restart "gretap-keepalive-${ID}"
+            fi
+        done
+        success "All services restarted and refreshed."
     fi
+    
+    # 3. Clean Zombies (Stuck Interfaces without service)
+    # logic: if interface gt4_X exists but service is stopped -> delete it? 
+    # For now, let's just log status.
+    log "Current Interfaces:"
+    ip link show type gretap
+    
+    success "Repair Complete!"
+    read -p "Press Enter to continue..."
 }
 
 # ==========================================
-# Create Tunnel Service
+# 2. INSTALL TUNNEL FUNCTION
 # ==========================================
-create_tunnel() {
-    local TYPE=$1
-    echo -e "${BLUE}═══════════════════════════════════════${NC}"
-    if [ "$TYPE" == "server" ]; then
-        echo -e "${BLUE}  Setup Server (Kharej) - GREtap${NC}"
-    else
-        echo -e "${BLUE}  Setup Client (Iran) - GREtap${NC}"
+install_tunnel() {
+    echo -e "\n${CYAN}--- Install New GREtap Tunnel ---${NC}"
+    
+    # Prerequisite Check
+    if ! lsmod | grep -q "ip_gre"; then
+        log "Loading ip_gre module..."
+        modprobe ip_gre
+        echo "ip_gre" > /etc/modules-load.d/ip_gre.conf
     fi
-    echo -e "${BLUE}═══════════════════════════════════════${NC}"
-    echo ""
 
+    # 1. Gather Info
+    read -p "Tunnel ID (e.g. 1): " ID
+    ID=${ID:-1}
+    
     # Detect Public IP
     local MY_IP=$(hostname -I | awk '{print $1}')
-    
-    echo -e "Your IP seems to be: ${GREEN}${MY_IP}${NC}"
-    read -p "Enter Local IP (this server) [${MY_IP}]: " LOCAL_IP
+    read -p "Local IP (this server) [${MY_IP}]: " LOCAL_IP
     LOCAL_IP=${LOCAL_IP:-$MY_IP}
-
-    read -p "Enter Remote IP (peer server): " REMOTE_IP
-    [[ -z "$REMOTE_IP" ]] && { echo -e "${RED}Remote IP required${NC}"; return; }
-
-    # Tunnel Interface Name
-    read -p "Tunnel Interface Name [gretap1]: " TUN_NAME
-    TUN_NAME=${TUN_NAME:-gretap1}
-
-    # Tunnel Internal IP (CIDR)
-    if [ "$TYPE" == "server" ]; then
-        DEFAULT_CIDR="10.10.10.1/30"
+    
+    read -p "Remote IP (peer server): " REMOTE_IP
+    if [ -z "$REMOTE_IP" ]; then error "Remote IP required!"; return; fi
+    
+    # Inner IP Helper
+    echo -e "\n${YELLOW}Addressing Plan:${NC}"
+    echo "1) Server (Hub) -> 10.10.${ID}.1/30"
+    echo "2) Client (Spoke) -> 10.10.${ID}.2/30"
+    echo "3) Custom"
+    read -p "Select Mode: " MODE
+    
+    if [ "$MODE" == "1" ]; then
+        TUN_IP="10.10.${ID}.1/30"
+        REMOTE_TUN_IP="10.10.${ID}.2"
+    elif [ "$MODE" == "2" ]; then
+        TUN_IP="10.10.${ID}.2/30"
+        REMOTE_TUN_IP="10.10.${ID}.1"
     else
-        DEFAULT_CIDR="10.10.10.2/30"
+        read -p "Enter Tunnel IP CIDR (e.g. 10.10.1.1/30): " TUN_IP
+        read -p "Enter Remote Tunnel IP (for Ping check): " REMOTE_TUN_IP
     fi
-    read -p "Tunnel IP (CIDR) [${DEFAULT_CIDR}]: " TUN_IP
-    TUN_IP=${TUN_IP:-$DEFAULT_CIDR}
 
-    # TTL
-    read -p "Tunnel TTL [255]: " TTL_VAL
-    TTL_VAL=${TTL_VAL:-255}
+    IF_NAME="gt4_${ID}"
+    
+    log "Configuration:"
+    log "  Interface: $IF_NAME"
+    log "  Local: $LOCAL_IP -> Remote: $REMOTE_IP"
+    log "  IP: $TUN_IP"
+    log "  Target for Watchdog: $REMOTE_TUN_IP"
+    
+    read -p "Press Enter to Install..."
+    
+    # 2. Create Up Script
+    SCRIPT_PATH="/usr/local/bin/gretap-up-${ID}.sh"
+    log "Creating Script: $SCRIPT_PATH"
+    
+    cat <<EOF > "$SCRIPT_PATH"
+#!/bin/bash
+# GREtap Setup Script for Tunnel ${ID}
 
-    SERVICE_NAME="gretap-${TUN_NAME}"
+# Cleanup
+ip link set $IF_NAME down 2>/dev/null
+ip link del $IF_NAME 2>/dev/null || true
 
-    echo -e "${YELLOW}Creating systemd service: $SERVICE_NAME...${NC}"
+# Header
+echo "Setting up $IF_NAME..."
 
-    # Create Systemd Service
-    # Note: We use Type=oneshot with RemainAfterExit=yes for network interface setup
-    cat <<EOF > /etc/systemd/system/$SERVICE_NAME.service
+# Create
+ip link add dev $IF_NAME type gretap local $LOCAL_IP remote $REMOTE_IP ttl 255
+ip link set $IF_NAME mtu 1450
+ip link set $IF_NAME up
+ip addr add $TUN_IP dev $IF_NAME
+
+echo "$IF_NAME is UP."
+EOF
+    chmod +x "$SCRIPT_PATH"
+    
+    # 3. Create Systemd Service
+    SERVICE_NAME="gretap-${ID}"
+    SERVICE_PATH="/etc/systemd/system/$SERVICE_NAME.service"
+    log "Creating Service: $SERVICE_PATH"
+    
+    cat <<EOF > "$SERVICE_PATH"
 [Unit]
-Description=GREtap Tunnel ($TUN_NAME)
-After=network.target
+Description=GREtap Tunnel ${ID} ($IF_NAME)
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/sbin/ip link add $TUN_NAME type gretap remote $REMOTE_IP local $LOCAL_IP ttl $TTL_VAL
-ExecStart=/sbin/ip link set $TUN_NAME up
-ExecStart=/sbin/ip addr add $TUN_IP dev $TUN_NAME
-ExecStop=/sbin/ip link set $TUN_NAME down
-ExecStop=/sbin/ip link del $TUN_NAME
+ExecStart=$SCRIPT_PATH
+ExecStop=/sbin/ip link set $IF_NAME down ; /sbin/ip link del $IF_NAME
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable $SERVICE_NAME
-    systemctl restart $SERVICE_NAME
-
-    sleep 1
-    local status=$(systemctl is-active "$SERVICE_NAME" 2>/dev/null)
-
-    echo ""
-    echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Tunnel Setup Complete! (${status})${NC}"
-    echo -e "${GREEN}  Service  : ${SERVICE_NAME}${NC}"
-    echo -e "${GREEN}  Interface: ${TUN_NAME}${NC}"
-    echo -e "${GREEN}  Local IP : ${LOCAL_IP}${NC}"
-    echo -e "${GREEN}  Remote IP: ${REMOTE_IP}${NC}"
-    echo -e "${GREEN}  Tunnel IP: ${TUN_IP}${NC}"
-    echo -e "${GREEN}═══════════════════════════════════════${NC}"
+    # 4. Create Smart Watchdog
+    WD_SCRIPT="/usr/local/bin/gretap-keepalive-${ID}.sh"
+    log "Creating Watchdog: $WD_SCRIPT"
     
-    if [ "$TYPE" == "server" ]; then
-         echo -e "${YELLOW}Now run this script on the CLIENT side with swapped IPs.${NC}"
-    fi
-    read -p "Press Enter to continue..."
+    cat <<EOF > "$WD_SCRIPT"
+#!/bin/bash
+TARGET="$REMOTE_TUN_IP"
+IFACE="$IF_NAME"
+SERVICE="$SERVICE_NAME"
+LOGFILE="/var/log/gretap-wd-${ID}.log"
+
+log() {
+    echo "[(\$(date)] \$1"
 }
-
-# ==========================================
-# List / Status
-# ==========================================
-list_tunnels() {
-    echo ""
-    echo -e "${CYAN}CONFIGURED GRETAP TUNNELS${NC}"
-    echo ""
-
-    local found=false
-    for f in /etc/systemd/system/gretap-*.service; do
-        [[ ! -f "$f" ]] && continue
-        found=true
-        local svc=$(basename "$f" .service)
-        local status=$(systemctl is-active "$svc" 2>/dev/null)
-        if [[ "$status" == "active" ]]; then
-            echo -e "  ${GREEN}[ON]${NC}  $svc"
-        else
-            echo -e "  ${RED}[OFF]${NC} $svc"
-        fi
-    done
-
-    $found || echo -e "  ${YELLOW}No tunnels configured${NC}"
-    
-    echo ""
-    echo -e "${CYAN}ACTIVE INTERFACES (ip link)${NC}"
-    ip link show type gretap
-    
-    echo ""
-    read -p "Press Enter to continue..."
-}
-
-# ==========================================
-# Uninstall
-# ==========================================
-uninstall_menu() {
-    echo -e "${BLUE}--- Uninstall Tunnel ---${NC}"
-    
-    SERVICES=$(ls /etc/systemd/system/gretap-*.service 2>/dev/null)
-    
-    if [ -z "$SERVICES" ]; then
-        echo -e "${RED}No GREtap services found.${NC}"
-        read -p "Press Enter to continue..."
-        return
-    fi
-    
-    echo "Found services:"
-    i=1
-    declare -A SERVICE_MAP
-    for svc_path in $SERVICES; do
-        svc_name=$(basename "$svc_path" .service)
-        local status=$(systemctl is-active "$svc_name" 2>/dev/null)
-        if [[ "$status" == "active" ]]; then
-            echo -e "  $i) ${GREEN}[ON]${NC}  $svc_name"
-        else
-            echo -e "  $i) ${RED}[OFF]${NC} $svc_name"
-        fi
-        SERVICE_MAP[$i]=$svc_name
-        i=$((i+1))
-    done
-    echo "  0) Cancel"
-    
-    read -p "Select: " CHOICE
-    
-    [[ "$CHOICE" == "0" ]] && return
-
-    SVC=${SERVICE_MAP[$CHOICE]}
-    if [ ! -z "$SVC" ]; then
-        echo -e "${YELLOW}Stopping and removing $SVC...${NC}"
-        systemctl stop $SVC
-        systemctl disable $SVC
-        rm -f "/etc/systemd/system/$SVC.service"
-        systemctl daemon-reload
-        echo -e "${GREEN}Service '$SVC' removed${NC}"
-        
-        # Manually cleanup if script failed
-        IFACE=$(echo "$SVC" | sed 's/gretap-//')
-        if ip link show $IFACE > /dev/null 2>&1; then
-             ip link del $IFACE
-             echo -e "${GREEN}Interface $IFACE deleted manually${NC}"
-        fi
-    else
-        echo "Invalid choice."
-    fi
-    
-    read -p "Press Enter to continue..."
-}
-
-# ==========================================
-# Main Menu
-# ==========================================
-check_prereqs
 
 while true; do
+    FAIL=0
+    
+    # Check 1: Interface Existence
+    if ! ip link show "\$IFACE" > /dev/null 2>&1; then
+        log "CRITICAL: Interface \$IFACE missing!"
+        FAIL=1
+    fi
+    
+    # Check 2: Ping (Only if interface exists)
+    if [ \$FAIL -eq 0 ]; then
+        # -c 3: Try 3 packets
+        # -W 2: Wait max 2 seconds per packet
+        if ! ping -c 3 -W 2 "\$TARGET" > /dev/null 2>&1; then
+            log "WARNING: Ping to \$TARGET failed."
+            FAIL=1
+        fi
+    fi
+    
+    # Action
+    if [ \$FAIL -eq 1 ]; then
+        log "Repairing tunnel..."
+        systemctl restart "\$SERVICE"
+        sleep 5
+        
+        # Post-Repair Check
+        if ping -c 1 -W 1 "\$TARGET" > /dev/null 2>&1; then
+             log "RECOVERED: Tunnel is back up."
+        else
+             log "ERROR: Repair attempt failed. Retrying in next cycle."
+        fi
+    fi
+    
+    sleep 10
+done
+EOF
+    chmod +x "$WD_SCRIPT"
+    
+    # 5. Watchdog Service
+    WD_SERVICE="gretap-keepalive-${ID}"
+    WD_SVC_PATH="/etc/systemd/system/$WD_SERVICE.service"
+    
+    cat <<EOF > "$WD_SVC_PATH"
+[Unit]
+Description=Keepalive for GREtap Tunnel ${ID}
+After=$SERVICE_NAME.service
+
+[Service]
+ExecStart=$WD_SCRIPT
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # 6. Activation
+    log "Enabling Services..."
+    systemctl daemon-reload
+    systemctl enable "$SERVICE_NAME" "$WD_SERVICE"
+    
+    log "Starting Tunnel..."
+    systemctl start "$SERVICE_NAME"
+    
+    log "Starting Watchdog..."
+    systemctl start "$WD_SERVICE"
+    
+    success "Tunnel ${ID} Installed Successfully!"
+    echo -e "  IP: $TUN_IP"
+    echo -e "  Testing Ping to $REMOTE_TUN_IP..."
+    ping -c 3 -W 1 "$REMOTE_TUN_IP"
+    read -p "Press Enter to continue..."
+}
+
+# ==========================================
+# 3. UNINSTALL FUNCTION
+# ==========================================
+uninstall_tunnel() {
+    echo -e "\n${RED}--- Uninstall Menu ---${NC}"
+    read -p "Enter Tunnel ID to remove: " ID
+    
+    if [ -z "$ID" ]; then return; fi
+    
+    SERVICE="gretap-${ID}"
+    WD_SERVICE="gretap-keepalive-${ID}"
+    
+    log "Stopping Services..."
+    systemctl stop "$WD_SERVICE" "$SERVICE" 2>/dev/null
+    systemctl disable "$WD_SERVICE" "$SERVICE" 2>/dev/null
+    
+    log "Removing Files..."
+    rm -f "/etc/systemd/system/$SERVICE.service"
+    rm -f "/etc/systemd/system/$WD_SERVICE.service"
+    rm -f "/usr/local/bin/gretap-up-${ID}.sh"
+    rm -f "/usr/local/bin/gretap-keepalive-${ID}.sh"
+    
+    log "Reloading Systemd..."
+    systemctl daemon-reload
+    
+    # Cleanup interface just in case
+    ip link del "gt4_${ID}" 2>/dev/null
+    
+    success "Tunnel ${ID} Removed."
+    read -p "Press Enter to continue..."
+}
+
+# ==========================================
+# MAIN MENU
+# ==========================================
+while true; do
     clear
-    echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  GREtap Tunnel Manager v1.0${NC}"
-    echo -e "${GREEN}  L2 Tunneling (Ethernet over GRE)${NC}"
-    echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo ""
-    echo -e "${CYAN}1) Setup Server (Kharej)${NC}"
-    echo -e "${CYAN}2) Setup Client (Iran)${NC}"
-    echo ""
-    echo "3) List Tunnels / Status"
-    echo "4) Uninstall Tunnel"
+    echo -e "${GREEN}====================================${NC}"
+    echo -e "${GREEN}   GREtap Tunnel Manager v2.0       ${NC}"
+    echo -e "${GREEN}   (Layer 2 over Layer 3)           ${NC}"
+    echo -e "${GREEN}   Inspired by ssh-network-manager  ${NC}"
+    echo -e "${GREEN}====================================${NC}"
+    echo "1) Install New Tunnel"
+    echo "2) Repair / Fix Services (Smart Watchdog)"
+    echo "3) Uninstall Tunnel"
     echo "0) Exit"
     echo ""
-    read -p "Select: " OPTION
-
+    read -p "Select Option: " OPTION
+    
     case $OPTION in
-        1)
-            create_tunnel "server"
-            ;;
-        2)
-            create_tunnel "client"
-            ;;
-        3)
-            list_tunnels
-            ;;
-        4)
-            uninstall_menu
-            ;;
-        0)
-            echo "Exiting..."
-            exit 0
-            ;;
-        *)
-            echo "Invalid option"
-            sleep 1
-            ;;
+        1) install_tunnel ;;
+        2) fix_services ;;
+        3) uninstall_tunnel ;;
+        0) exit 0 ;;
+        *) echo "Invalid Option" ; sleep 1 ;;
     esac
 done

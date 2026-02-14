@@ -266,7 +266,7 @@ EOF
     echo -e "  IP: $TUN_IP"
     echo -e "  Testing Ping to $REMOTE_TUN_IP..."
     ping -c 3 -W 1 "$REMOTE_TUN_IP"
-    read -p "Press Enter to continue..." < /dev/tty
+    read -p "Press Enter to continue..."
 }
 
 # ==========================================
@@ -298,7 +298,7 @@ uninstall_tunnel() {
     ip link del "gt4_${ID}" 2>/dev/null
     
     success "Tunnel ${ID} Removed."
-    read -p "Press Enter to continue..." < /dev/tty
+    read -p "Press Enter to continue..."
 }
 
 # ==========================================

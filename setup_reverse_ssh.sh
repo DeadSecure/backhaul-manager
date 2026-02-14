@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-#  Reverse SSH Tunnel Manager v3.0
+#  Reverse SSH Tunnel Manager v4.0
 #  Native OpenSSH | BBR Optimized
 #  Direction: Kharej -> Iran (Reverse)
 # ==========================================
@@ -193,20 +193,17 @@ setup_client() {
         [[ ! $c =~ ^[Yy]$ ]] && return
     fi
 
-    # Kernel optimization
     optimize_kernel
 
     echo ""
-    echo -e "${CYAN}PORT FORWARDING (Multi-Port, Single Tunnel)${NC}"
-    echo -e "  For each port you can set a different destination."
+    echo -e "${CYAN}PORT FORWARDING (Multi-Tunnel)${NC}"
+    echo -e "  Each port gets its own dedicated SSH connection (Systemd Service)."
     echo ""
     echo -e "  ${MAGENTA}Flow: User -> Iran:PORT -> Tunnel -> Dest_IP:Dest_PORT${NC}"
     echo ""
 
-    local R_FLAGS=""
     local MAP_COUNT=0
     local SERVICES_LIST=""
-    local FIRST_PORT=""
 
     while true; do
         echo ""
@@ -219,23 +216,11 @@ setup_client() {
         read -p "Destination port [${IRAN_PORT}]: " DEST_PORT
         DEST_PORT=${DEST_PORT:-$IRAN_PORT}
 
-        R_FLAGS="${R_FLAGS} -R 0.0.0.0:${IRAN_PORT}:${DEST_IP}:${DEST_PORT}"
+        SERVICE_NAME="${PREFIX}-${IRAN_PORT}"
 
-        MAP_COUNT=$((MAP_COUNT + 1))
-        [[ -z "$FIRST_PORT" ]] && FIRST_PORT=$IRAN_PORT
-        SERVICES_LIST="${SERVICES_LIST}  Iran:${IRAN_PORT} -> ${DEST_IP}:${DEST_PORT}\n"
-        echo -e "  ${GREEN}Added: Iran:${IRAN_PORT} -> ${DEST_IP}:${DEST_PORT}${NC}"
-    done
-
-    if [[ $MAP_COUNT -eq 0 ]]; then
-        echo -e "${RED}No port mappings added${NC}"
-        return
-    fi
-
-    SERVICE_NAME="${PREFIX}-${FIRST_PORT}"
-
-    # Build single optimized SSH command with ALL -R flags
-    EXEC_CMD="/usr/bin/ssh -N${R_FLAGS} \
+        # Build optimized SSH command for THIS port
+        EXEC_CMD="/usr/bin/ssh -N \
+-R 0.0.0.0:${IRAN_PORT}:${DEST_IP}:${DEST_PORT} \
 -o Ciphers=aes128-gcm@openssh.com \
 -o Compression=no \
 -o IPQoS=throughput \
@@ -249,9 +234,9 @@ setup_client() {
 -i ${SSH_KEY} \
 ${SSH_USER}@${IRAN_IP} -p ${SSH_PORT}"
 
-    cat <<EOF > /etc/systemd/system/${SERVICE_NAME}.service
+        cat <<EOF > /etc/systemd/system/${SERVICE_NAME}.service
 [Unit]
-Description=Reverse SSH Tunnel (${MAP_COUNT} ports via ${IRAN_IP})
+Description=Reverse SSH Tunnel (Iran:${IRAN_PORT} -> ${DEST_IP}:${DEST_PORT})
 After=network-online.target
 Wants=network-online.target
 
@@ -259,7 +244,7 @@ Wants=network-online.target
 Type=simple
 ExecStart=${EXEC_CMD}
 Restart=always
-RestartSec=10
+RestartSec=3
 StartLimitInterval=0
 User=root
 
@@ -267,35 +252,52 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable $SERVICE_NAME > /dev/null 2>&1
-    systemctl restart $SERVICE_NAME
+        systemctl daemon-reload
+        systemctl enable $SERVICE_NAME > /dev/null 2>&1
+        systemctl restart $SERVICE_NAME
+
+        MAP_COUNT=$((MAP_COUNT + 1))
+        SERVICES_LIST="${SERVICES_LIST}  Iran:${IRAN_PORT} -> ${DEST_IP}:${DEST_PORT}\n"
+        echo -e "  ${GREEN}Service Started: ${SERVICE_NAME}${NC}"
+    done
+
+    if [[ $MAP_COUNT -eq 0 ]]; then
+        echo -e "${RED}No port mappings added${NC}"
+        return
+    fi
 
     # Offer watchdog
+    echo ""
     read -p "Enable Watchdog (Auto-Reconnect)? (Y/n): " WD
     WD=${WD:-Y}
     if [[ "$WD" =~ ^[Yy]$ ]]; then
-        install_watchdog "$SERVICE_NAME"
+        install_watchdog_for_all
     fi
-
-    sleep 2
-    local status=$(systemctl is-active "$SERVICE_NAME" 2>/dev/null)
 
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Kharej Client Ready! (${status})${NC}"
+    echo -e "${GREEN}  Kharej Client Ready!${NC}"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     echo -e "${GREEN}  Iran       : ${SSH_USER}@${IRAN_IP}:${SSH_PORT}${NC}"
-    echo -e "${GREEN}  Cipher     : aes128-gcm (HW accel)${NC}"
-    echo -e "${GREEN}  BBR        : $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)${NC}"
-    echo -e "${GREEN}  Ports      : ${MAP_COUNT} (single tunnel)${NC}"
-    echo -e "${GREEN}  Service    : ${SERVICE_NAME}${NC}"
+    echo -e "${GREEN}  Tunnels    : ${MAP_COUNT} (Separate Services)${NC}"
     printf "$SERVICES_LIST"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     echo ""
     echo -e "${CYAN}Traffic flow:${NC}"
-    echo -e "  User -> Iran:PORT -> SSH Tunnel -> Dest_IP:Dest_PORT"
+    echo -e "  User -> Iran:PORT -> Dedicated Tunnel -> Dest_IP:Dest_PORT"
     read -p "Press Enter to continue..."
+}
+
+# ==========================================
+# Install Watchdog for ALL active services
+# ==========================================
+install_watchdog_for_all() {
+    echo -e "${BLUE}--- Installing Watchdog for ALL services ---${NC}"
+    for svc_file in /etc/systemd/system/${PREFIX}-*.service; do
+        [[ ! -f "$svc_file" ]] && continue
+        local svc_name=$(basename "$svc_file" .service)
+        install_watchdog "$svc_name"
+    done
 }
 
 # ==========================================

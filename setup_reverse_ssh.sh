@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-#  Reverse SSH Tunnel Manager v2.0
+#  Reverse SSH Tunnel Manager v3.0
 #  Native OpenSSH | BBR Optimized
 #  Direction: Kharej -> Iran (Reverse)
 # ==========================================
@@ -200,7 +200,7 @@ setup_client() {
     echo -e "${CYAN}PORT FORWARDING (Multi-Port, Single Tunnel)${NC}"
     echo -e "  For each port you can set a different destination."
     echo ""
-    echo -e "  ${MAGENTA}Flow: User -> Iran:PORT -> Tunnel -> Dest:PORT${NC}"
+    echo -e "  ${MAGENTA}Flow: User -> Iran:PORT -> Tunnel -> Dest_IP:Dest_PORT${NC}"
     echo ""
 
     local R_FLAGS=""
@@ -286,7 +286,6 @@ EOF
     echo -e "${GREEN}  Kharej Client Ready! (${status})${NC}"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     echo -e "${GREEN}  Iran       : ${SSH_USER}@${IRAN_IP}:${SSH_PORT}${NC}"
-    echo -e "${GREEN}  Dest       : ${DEST_IP}${NC}"
     echo -e "${GREEN}  Cipher     : aes128-gcm (HW accel)${NC}"
     echo -e "${GREEN}  BBR        : $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)${NC}"
     echo -e "${GREEN}  Ports      : ${MAP_COUNT} (single tunnel)${NC}"
@@ -295,7 +294,7 @@ EOF
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     echo ""
     echo -e "${CYAN}Traffic flow:${NC}"
-    echo -e "  User -> Iran:PORT -> SSH Tunnel -> ${DEST_IP}:PORT"
+    echo -e "  User -> Iran:PORT -> SSH Tunnel -> Dest_IP:Dest_PORT"
     read -p "Press Enter to continue..."
 }
 

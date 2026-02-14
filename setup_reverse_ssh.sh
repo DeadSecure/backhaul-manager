@@ -3,6 +3,11 @@
 # ==========================================
 #  Reverse SSH Tunnel Manager v1.0
 #  Native OpenSSH | Optimized for Speed
+#  Direction: Kharej -> Iran (Reverse)
+# ==========================================
+# Iran  = SSH Server (sshd listens)
+# Kharej = SSH Client (connects to Iran, opens ports on Iran via -R)
+# Users on Iran -> port on Iran -> tunnel -> Kharej
 # ==========================================
 
 RED='\033[0;31m'
@@ -28,35 +33,24 @@ fi
 optimize_kernel() {
     echo -e "${BLUE}--- Kernel TCP/BBR Optimization ---${NC}"
 
-    # Check current BBR status
     local current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
     echo -e "  Current congestion control: ${YELLOW}${current_cc}${NC}"
 
     cat <<EOF > $SYSCTL_CONF
-# ==========================================
 # Reverse SSH Tunnel Optimization
-# ==========================================
-
-# TCP Buffer Sizes (16MB max)
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 net.core.rmem_default = 1048576
 net.core.wmem_default = 1048576
 net.ipv4.tcp_rmem = 4096 87380 16777216
 net.ipv4.tcp_wmem = 4096 65536 16777216
-
-# BBR Congestion Control (Google)
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
-
-# TCP Performance
 net.ipv4.tcp_window_scaling = 1
 net.ipv4.tcp_fastopen = 3
 net.ipv4.tcp_mtu_probing = 1
 net.ipv4.tcp_slow_start_after_idle = 0
 net.ipv4.tcp_no_metrics_save = 1
-
-# Connection Tracking
 net.ipv4.tcp_max_syn_backlog = 8192
 net.core.somaxconn = 8192
 net.core.netdev_max_backlog = 16384
@@ -70,22 +64,22 @@ EOF
 }
 
 # ==========================================
-# Setup Server (Kharej - Outside)
+# Setup Server (IRAN) - SSH Server
+# Kharej will connect TO this server
 # ==========================================
 setup_server() {
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
-    echo -e "${BLUE}  Setup Server (KHAREJ) - Reverse SSH${NC}"
+    echo -e "${BLUE}  Setup Server (IRAN) - SSH Server${NC}"
+    echo -e "${BLUE}  Kharej will connect to this server${NC}"
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
     echo ""
 
     local SSHD_CONF="/etc/ssh/sshd_config"
     local BACKUP="/etc/ssh/sshd_config.bak.$(date +%s)"
 
-    # Backup sshd_config
     cp "$SSHD_CONF" "$BACKUP"
     echo -e "${YELLOW}Backup: ${BACKUP}${NC}"
 
-    # Function to set or add a config line
     set_sshd_param() {
         local key="$1"
         local val="$2"
@@ -96,7 +90,7 @@ setup_server() {
         fi
     }
 
-    # Apply server-side optimizations
+    # GatewayPorts: allow -R to bind on 0.0.0.0
     set_sshd_param "GatewayPorts" "yes"
     set_sshd_param "UseDNS" "no"
     set_sshd_param "ClientAliveInterval" "15"
@@ -106,8 +100,8 @@ setup_server() {
     set_sshd_param "TCPKeepAlive" "yes"
     set_sshd_param "PermitRootLogin" "yes"
     set_sshd_param "PubkeyAuthentication" "yes"
+    set_sshd_param "AllowTcpForwarding" "yes"
 
-    # Restart sshd
     systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
 
     # Kernel optimization
@@ -119,15 +113,21 @@ setup_server() {
 
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Server Ready!${NC}"
+    echo -e "${GREEN}  Iran Server Ready!${NC}"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  IP         : ${IP}${NC}"
-    echo -e "${GREEN}  SSH Port   : ${SSH_PORT}${NC}"
-    echo -e "${GREEN}  GatewayPorts: yes${NC}"
-    echo -e "${GREEN}  BBR        : $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)${NC}"
+    echo -e "${GREEN}  IP             : ${IP}${NC}"
+    echo -e "${GREEN}  SSH Port       : ${SSH_PORT}${NC}"
+    echo -e "${GREEN}  GatewayPorts   : yes${NC}"
+    echo -e "${GREEN}  BBR            : $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)${NC}"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
     echo ""
-    echo -e "${YELLOW}Now run the CLIENT setup on your Iran server.${NC}"
+    echo -e "${YELLOW}---- COPY THIS FOR KHAREJ SETUP ----${NC}"
+    echo -e "${CYAN}Iran IP:${NC}    ${GREEN}${IP}${NC}"
+    echo -e "${CYAN}SSH Port:${NC}   ${GREEN}${SSH_PORT}${NC}"
+    echo -e "${CYAN}SSH User:${NC}   ${GREEN}root${NC}"
+    echo -e "${YELLOW}------------------------------------${NC}"
+    echo ""
+    echo -e "${YELLOW}Now run the CLIENT setup on your Kharej server.${NC}"
     read -p "Press Enter to continue..."
 }
 
@@ -146,15 +146,15 @@ generate_ssh_key() {
 }
 
 # ==========================================
-# Copy Key to Server
+# Copy Key to Iran Server
 # ==========================================
 copy_key_to_server() {
     local server_ip="$1"
     local ssh_port="$2"
     local ssh_user="$3"
 
-    echo -e "${YELLOW}Copying SSH key to ${ssh_user}@${server_ip}:${ssh_port}...${NC}"
-    echo -e "${CYAN}You will be asked for the server password (one time only)${NC}"
+    echo -e "${YELLOW}Copying SSH key to ${ssh_user}@${server_ip}:${ssh_port} (Iran)...${NC}"
+    echo -e "${CYAN}You will be asked for Iran server password (one time only)${NC}"
 
     ssh-copy-id -i "${SSH_KEY}.pub" -p "$ssh_port" -o StrictHostKeyChecking=no "${ssh_user}@${server_ip}"
 
@@ -168,55 +168,59 @@ copy_key_to_server() {
 }
 
 # ==========================================
-# Setup Client (Iran)
+# Setup Client (KHAREJ) - Connects to Iran
+# Opens ports on Iran via -R
 # ==========================================
 setup_client() {
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
-    echo -e "${BLUE}  Setup Client (IRAN) - Reverse SSH${NC}"
+    echo -e "${BLUE}  Setup Client (KHAREJ) - SSH Client${NC}"
+    echo -e "${BLUE}  Connects TO Iran, forwards ports${NC}"
     echo -e "${BLUE}═══════════════════════════════════════${NC}"
     echo ""
 
-    read -p "Server (Kharej) IP: " SERVER_IP
-    [[ -z "$SERVER_IP" ]] && { echo -e "${RED}IP required${NC}"; return; }
+    read -p "Iran Server IP: " IRAN_IP
+    [[ -z "$IRAN_IP" ]] && { echo -e "${RED}IP required${NC}"; return; }
 
-    read -p "Server SSH Port [22]: " SSH_PORT
+    read -p "Iran SSH Port [22]: " SSH_PORT
     SSH_PORT=${SSH_PORT:-22}
 
-    read -p "Server SSH User [root]: " SSH_USER
+    read -p "Iran SSH User [root]: " SSH_USER
     SSH_USER=${SSH_USER:-root}
 
-    # Generate key & copy
+    # Generate key on Kharej & copy to Iran
     generate_ssh_key
-    copy_key_to_server "$SERVER_IP" "$SSH_PORT" "$SSH_USER"
+    copy_key_to_server "$IRAN_IP" "$SSH_PORT" "$SSH_USER"
     if [[ $? -ne 0 ]]; then
         read -p "Continue anyway? (y/N): " c
         [[ ! $c =~ ^[Yy]$ ]] && return
     fi
 
-    # Kernel optimization (client side)
+    # Kernel optimization (Kharej side)
     optimize_kernel
 
     echo ""
-    echo -e "${CYAN}PORT FORWARDING${NC}"
-    echo -e "  ${YELLOW}Local${NC}  = Port on this Iran server"
-    echo -e "  ${YELLOW}Remote${NC} = Port exposed on Kharej server"
+    echo -e "${CYAN}PORT FORWARDING (Reverse)${NC}"
+    echo -e "  ${YELLOW}Iran Port${NC}   = Port opened on Iran for users"
+    echo -e "  ${YELLOW}Kharej Port${NC} = Local port on this Kharej server"
+    echo -e ""
+    echo -e "  ${MAGENTA}Flow: User -> Iran:PORT -> tunnel -> Kharej:PORT${NC}"
     echo ""
 
     local MAP_COUNT=0
     local SERVICES_LIST=""
 
     while true; do
-        read -p "Local port (or Enter to finish): " LOCAL_PORT
-        [[ -z "$LOCAL_PORT" ]] && break
+        read -p "Iran port (or Enter to finish): " IRAN_PORT
+        [[ -z "$IRAN_PORT" ]] && break
 
-        read -p "Remote port [${LOCAL_PORT}]: " REMOTE_PORT
-        REMOTE_PORT=${REMOTE_PORT:-$LOCAL_PORT}
+        read -p "Kharej local port [${IRAN_PORT}]: " KHAREJ_PORT
+        KHAREJ_PORT=${KHAREJ_PORT:-$IRAN_PORT}
 
-        SERVICE_NAME="${PREFIX}-${LOCAL_PORT}"
+        SERVICE_NAME="${PREFIX}-${IRAN_PORT}"
 
-        # Build optimized SSH command
+        # -R: open port on IRAN, forward to KHAREJ local
         EXEC_CMD="/usr/bin/ssh -N \
--R 0.0.0.0:${REMOTE_PORT}:127.0.0.1:${LOCAL_PORT} \
+-R 0.0.0.0:${IRAN_PORT}:127.0.0.1:${KHAREJ_PORT} \
 -o Ciphers=aes128-gcm@openssh.com \
 -o Compression=no \
 -o IPQoS=throughput \
@@ -228,11 +232,11 @@ setup_client() {
 -o UserKnownHostsFile=/dev/null \
 -o BatchMode=yes \
 -i ${SSH_KEY} \
-${SSH_USER}@${SERVER_IP} -p ${SSH_PORT}"
+${SSH_USER}@${IRAN_IP} -p ${SSH_PORT}"
 
         cat <<EOF > /etc/systemd/system/${SERVICE_NAME}.service
 [Unit]
-Description=Reverse SSH Tunnel (${LOCAL_PORT} -> ${REMOTE_PORT} on ${SERVER_IP})
+Description=Reverse SSH Tunnel (Iran:${IRAN_PORT} -> Kharej:${KHAREJ_PORT})
 After=network-online.target
 Wants=network-online.target
 
@@ -253,8 +257,8 @@ EOF
         systemctl restart $SERVICE_NAME
 
         MAP_COUNT=$((MAP_COUNT + 1))
-        SERVICES_LIST="${SERVICES_LIST}  ${LOCAL_PORT} -> ${REMOTE_PORT} on ${SERVER_IP}\n"
-        echo -e "  ${GREEN}Added: ${LOCAL_PORT} -> ${REMOTE_PORT}${NC}"
+        SERVICES_LIST="${SERVICES_LIST}  Iran:${IRAN_PORT} -> Kharej:${KHAREJ_PORT}\n"
+        echo -e "  ${GREEN}Added: Iran:${IRAN_PORT} -> Kharej:${KHAREJ_PORT}${NC}"
     done
 
     if [[ $MAP_COUNT -eq 0 ]]; then
@@ -271,13 +275,16 @@ EOF
 
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Client Ready!${NC}"
-    echo -e "${GREEN}  Server     : ${SSH_USER}@${SERVER_IP}:${SSH_PORT}${NC}"
-    echo -e "${GREEN}  Cipher     : aes128-gcm (HW accelerated)${NC}"
-    echo -e "${GREEN}  BBR        : $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)${NC}"
-    echo -e "${GREEN}  Mappings   : ${MAP_COUNT}${NC}"
+    echo -e "${GREEN}  Kharej Client Ready!${NC}"
+    echo -e "${GREEN}  Iran Server : ${SSH_USER}@${IRAN_IP}:${SSH_PORT}${NC}"
+    echo -e "${GREEN}  Cipher      : aes128-gcm (HW accel)${NC}"
+    echo -e "${GREEN}  BBR         : $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)${NC}"
+    echo -e "${GREEN}  Mappings    : ${MAP_COUNT}${NC}"
     printf "$SERVICES_LIST"
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${CYAN}Traffic flow:${NC}"
+    echo -e "  User -> Iran:PORT -> SSH Tunnel -> Kharej:PORT"
     read -p "Press Enter to continue..."
 }
 
@@ -290,14 +297,10 @@ install_watchdog_for_all() {
         local svc_name=$(basename "$svc_file" .service)
         local port=$(echo "$svc_name" | sed "s/${PREFIX}-//")
 
-        # Extract server IP from service file
-        local server_ip=$(grep "ExecStart" "$svc_file" | grep -oP '[^@]+@\K[^ ]+' | head -1)
-
         local wd_script="/usr/local/bin/watchdog-${svc_name}.sh"
 
         cat > "$wd_script" <<WDEOF
 #!/bin/bash
-# Watchdog for $svc_name
 LOG_PREFIX="[\$(date '+%Y-%m-%d %H:%M:%S')] [$svc_name]"
 
 # 1. Check systemd service
@@ -308,7 +311,7 @@ if [ "\$IS_ACTIVE" != "active" ]; then
     exit 0
 fi
 
-# 2. Check SSH process is alive
+# 2. Check SSH process
 SSH_PID=\$(systemctl show -p MainPID --value $svc_name)
 if [ -z "\$SSH_PID" ] || [ "\$SSH_PID" -eq 0 ]; then
     echo "\$LOG_PREFIX No SSH process. Restarting..."
@@ -316,13 +319,9 @@ if [ -z "\$SSH_PID" ] || [ "\$SSH_PID" -eq 0 ]; then
     exit 0
 fi
 
-# 3. Check remote port is accepting connections (via SSH)
-ssh -i ${SSH_KEY} -p \$(grep -oP '\-p \K[0-9]+' /etc/systemd/system/${svc_name}.service | head -1) \
-    -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no \
-    ${server_ip} "nc -z 127.0.0.1 ${port} 2>/dev/null" 2>/dev/null
-
-if [ \$? -ne 0 ]; then
-    echo "\$LOG_PREFIX Remote port ${port} not open. Restarting..."
+# 3. Check process is actually alive
+if ! kill -0 \$SSH_PID 2>/dev/null; then
+    echo "\$LOG_PREFIX SSH PID \$SSH_PID dead. Restarting..."
     systemctl restart $svc_name
 fi
 WDEOF
@@ -365,7 +364,6 @@ setup_watchdog() {
     echo "  0) Cancel"
 
     read -p "Select: " CHOICE
-
     [[ "$CHOICE" == "0" ]] && return
 
     if [[ "$CHOICE" =~ ^[Aa]$ ]]; then
@@ -374,11 +372,9 @@ setup_watchdog() {
         local svc=${SERVICE_MAP[$CHOICE]}
         if [ -z "$svc" ]; then
             echo "Invalid option"
+            read -p "Press Enter to continue..."
             return
         fi
-        # Install for single service
-        local port=$(echo "$svc" | sed "s/${PREFIX}-//")
-        local server_ip=$(grep "ExecStart" "/etc/systemd/system/${svc}.service" | grep -oP '[^@]+@\K[^ ]+' | head -1)
         local wd_script="/usr/local/bin/watchdog-${svc}.sh"
 
         cat > "$wd_script" <<WDEOF
@@ -397,6 +393,11 @@ if [ -z "\$SSH_PID" ] || [ "\$SSH_PID" -eq 0 ]; then
     echo "\$LOG_PREFIX No SSH process. Restarting..."
     systemctl restart $svc
     exit 0
+fi
+
+if ! kill -0 \$SSH_PID 2>/dev/null; then
+    echo "\$LOG_PREFIX SSH PID dead. Restarting..."
+    systemctl restart $svc
 fi
 WDEOF
         chmod +x "$wd_script"
@@ -424,40 +425,22 @@ check_connection() {
     echo -e "${GREEN}Running Services:${NC}"
     echo "$SERVICES"
 
-    # Check listening ports
-    echo -e "\n${YELLOW}Checking Listening Ports...${NC}"
-    if command -v ss &> /dev/null; then
-        ss -tunlp | grep ssh | head -20
-    elif command -v netstat &> /dev/null; then
-        netstat -tunlp | grep ssh | head -20
-    fi
-
-    # Show detailed service info
     echo -e "\n${YELLOW}Service Details:${NC}"
     for svc_file in /etc/systemd/system/${PREFIX}-*.service; do
         [[ ! -f "$svc_file" ]] && continue
         local svc_name=$(basename "$svc_file" .service)
         local status=$(systemctl is-active "$svc_name" 2>/dev/null)
-        local uptime=$(systemctl show "$svc_name" --property=ActiveEnterTimestamp --value 2>/dev/null)
         local pid=$(systemctl show -p MainPID --value "$svc_name" 2>/dev/null)
+        local desc=$(grep "Description=" "$svc_file" | sed 's/Description=//')
 
         if [[ "$status" == "active" ]]; then
-            echo -e "  ${GREEN}[ON]${NC}  $svc_name | PID: $pid | Since: $uptime"
+            echo -e "  ${GREEN}[ON]${NC}  $svc_name | PID: $pid"
+            echo -e "        ${CYAN}${desc}${NC}"
         else
             echo -e "  ${RED}[OFF]${NC} $svc_name"
+            echo -e "        ${CYAN}${desc}${NC}"
         fi
     done
-
-    # Manual test
-    echo ""
-    read -p "Test a specific local port (or Enter to skip): " TEST_PORT
-    if [[ ! -z "$TEST_PORT" ]]; then
-        if nc -z -w 5 127.0.0.1 $TEST_PORT 2>/dev/null; then
-            echo -e "${GREEN}TCP port $TEST_PORT is OPEN${NC}"
-        else
-            echo -e "${RED}TCP port $TEST_PORT is CLOSED${NC}"
-        fi
-    fi
 
     read -p "Press Enter to continue..."
 }
@@ -468,6 +451,7 @@ check_connection() {
 list_tunnels() {
     echo ""
     echo -e "${CYAN}CONFIGURED REVERSE SSH TUNNELS${NC}"
+    echo -e "${CYAN}Direction: Kharej -> Iran (Reverse)${NC}"
     echo ""
 
     local found=false
@@ -480,11 +464,10 @@ list_tunnels() {
 
         if [[ "$status" == "active" ]]; then
             echo -e "  ${GREEN}[ON]${NC}  $svc"
-            echo -e "        ${CYAN}${desc}${NC}"
         else
             echo -e "  ${RED}[OFF]${NC} $svc"
-            echo -e "        ${CYAN}${desc}${NC}"
         fi
+        echo -e "        ${CYAN}${desc}${NC}"
     done
 
     $found || echo -e "  ${YELLOW}No tunnels configured${NC}"
@@ -518,7 +501,6 @@ view_logs() {
     echo "  0) Cancel"
 
     read -p "Select: " CHOICE
-
     [[ "$CHOICE" == "0" ]] && return
 
     if [[ "$CHOICE" =~ ^[Ww]$ ]]; then
@@ -571,7 +553,6 @@ uninstall_menu() {
     echo "  0) Cancel"
 
     read -p "Select: " CHOICE
-
     [[ "$CHOICE" == "0" ]] && return
 
     if [[ "$CHOICE" =~ ^[Aa]$ ]]; then
@@ -613,7 +594,6 @@ full_uninstall() {
     read -p "Are you sure? (yes/NO): " c
     [[ "$c" != "yes" ]] && return
 
-    # Stop and remove all services
     for f in /etc/systemd/system/${PREFIX}-*.service; do
         [[ ! -f "$f" ]] && continue
         local svc=$(basename "$f" .service)
@@ -623,18 +603,10 @@ full_uninstall() {
         rm -f "/usr/local/bin/watchdog-${svc}.sh"
     done
 
-    # Remove SSH key
     rm -f "$SSH_KEY" "${SSH_KEY}.pub"
-
-    # Remove kernel config
     rm -f "$SYSCTL_CONF"
-
-    # Clean crontab
     crontab -l 2>/dev/null | grep -v "rssh-tunnel\|rssh-watchdog\|watchdog-rssh" | crontab - 2>/dev/null
-
-    # Remove watchdog log
     rm -f /var/log/rssh-watchdog.log
-
     systemctl daemon-reload
 
     echo -e "${GREEN}Everything removed!${NC}"
@@ -648,12 +620,12 @@ while true; do
     clear
     echo -e "${MAGENTA}═══════════════════════════════════════${NC}"
     echo -e "${MAGENTA}  Reverse SSH Tunnel Manager v1.0${NC}"
-    echo -e "${MAGENTA}  Native OpenSSH | BBR Optimized${NC}"
+    echo -e "${MAGENTA}  Kharej -> Iran | BBR Optimized${NC}"
     echo -e "${MAGENTA}═══════════════════════════════════════${NC}"
     echo ""
     echo -e "${CYAN}--- Setup ---${NC}"
-    echo "1) Setup Server (Kharej - Outside)"
-    echo "2) Setup Client (Iran) + Port Forwarding"
+    echo "1) Setup Server (Iran)"
+    echo "2) Setup Client (Kharej) + Port Forward"
     echo ""
     echo -e "${CYAN}--- Management ---${NC}"
     echo "3) List Tunnels"

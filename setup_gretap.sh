@@ -67,7 +67,7 @@ fix_services() {
     ip link show type gretap
     
     success "Repair Complete!"
-    read -p "Press Enter to continue..."
+    read -p "Press Enter to continue..." < /dev/tty
 }
 
 # ==========================================
@@ -84,15 +84,15 @@ install_tunnel() {
     fi
 
     # 1. Gather Info
-    read -p "Tunnel ID (e.g. 1): " ID
+    read -p "Tunnel ID (e.g. 1): " ID < /dev/tty
     ID=${ID:-1}
     
     # Detect Public IP
     local MY_IP=$(hostname -I | awk '{print $1}')
-    read -p "Local IP (this server) [${MY_IP}]: " LOCAL_IP
+    read -p "Local IP (this server) [${MY_IP}]: " LOCAL_IP < /dev/tty
     LOCAL_IP=${LOCAL_IP:-$MY_IP}
     
-    read -p "Remote IP (peer server): " REMOTE_IP
+    read -p "Remote IP (peer server): " REMOTE_IP < /dev/tty
     if [ -z "$REMOTE_IP" ]; then error "Remote IP required!"; return; fi
     
     # Inner IP Helper
@@ -100,7 +100,7 @@ install_tunnel() {
     echo "1) Server (Hub) -> 10.10.${ID}.1/30"
     echo "2) Client (Spoke) -> 10.10.${ID}.2/30"
     echo "3) Custom"
-    read -p "Select Mode: " MODE
+    read -p "Select Mode: " MODE < /dev/tty
     
     if [ "$MODE" == "1" ]; then
         TUN_IP="10.10.${ID}.1/30"
@@ -109,8 +109,8 @@ install_tunnel() {
         TUN_IP="10.10.${ID}.2/30"
         REMOTE_TUN_IP="10.10.${ID}.1"
     else
-        read -p "Enter Tunnel IP CIDR (e.g. 10.10.1.1/30): " TUN_IP
-        read -p "Enter Remote Tunnel IP (for Ping check): " REMOTE_TUN_IP
+        read -p "Enter Tunnel IP CIDR (e.g. 10.10.1.1/30): " TUN_IP < /dev/tty
+        read -p "Enter Remote Tunnel IP (for Ping check): " REMOTE_TUN_IP < /dev/tty
     fi
 
     IF_NAME="gt4_${ID}"
@@ -121,7 +121,7 @@ install_tunnel() {
     log "  IP: $TUN_IP"
     log "  Target for Watchdog: $REMOTE_TUN_IP"
     
-    read -p "Press Enter to Install..."
+    read -p "Press Enter to Install..." < /dev/tty
     
     # 2. Create Up Script
     SCRIPT_PATH="/usr/local/bin/gretap-up-${ID}.sh"
@@ -255,7 +255,7 @@ EOF
     echo -e "  IP: $TUN_IP"
     echo -e "  Testing Ping to $REMOTE_TUN_IP..."
     ping -c 3 -W 1 "$REMOTE_TUN_IP"
-    read -p "Press Enter to continue..."
+    read -p "Press Enter to continue..." < /dev/tty
 }
 
 # ==========================================
@@ -263,7 +263,7 @@ EOF
 # ==========================================
 uninstall_tunnel() {
     echo -e "\n${RED}--- Uninstall Menu ---${NC}"
-    read -p "Enter Tunnel ID to remove: " ID
+    read -p "Enter Tunnel ID to remove: " ID < /dev/tty
     
     if [ -z "$ID" ]; then return; fi
     
@@ -287,7 +287,7 @@ uninstall_tunnel() {
     ip link del "gt4_${ID}" 2>/dev/null
     
     success "Tunnel ${ID} Removed."
-    read -p "Press Enter to continue..."
+    read -p "Press Enter to continue..." < /dev/tty
 }
 
 # ==========================================
@@ -305,7 +305,7 @@ while true; do
     echo "3) Uninstall Tunnel"
     echo "0) Exit"
     echo ""
-    read -p "Select Option: " OPTION
+    read -p "Select Option: " OPTION < /dev/tty
     
     case $OPTION in
         1) install_tunnel ;;

@@ -52,7 +52,6 @@ def install_xray():
             subprocess.run(["unzip", "-q", "-o", "xray.zip"], check=True)
             subprocess.run(["chmod", "+x", "xray"], check=True)
             print(f"{GREEN}Xray installed successfully.{RESET}")
-            # Cleanup
             if os.path.exists("xray.zip"): os.remove("xray.zip")
         except Exception as e:
             print(f"{RED}Error downloading Xray: {e}{RESET}")
@@ -62,78 +61,31 @@ def get_random_port():
     return random.randint(10000, 50000)
 
 def generate_config(ip, port):
-    """
-    Generates a full Xray config based on the user's VLESS snippet.
-    The 'address' field in vnext is replaced with the IP to test.
-    """
     config = {
-        "log": {
-            "loglevel": "none"
-        },
-        "inbounds": [
-            {
-                "port": port,
-                "protocol": "socks",
-                "settings": {
-                    "auth": "noauth",
-                    "udp": True
-                },
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls"]
-                }
-            }
-        ],
-        "outbounds": [
-            {
-                "tag": "proxy",
-                "protocol": "vless",
-                "settings": {
-                    "vnext": [
-                        {
-                            "address": ip,  # The IP we are testing
-                            "port": 443,
-                            "users": [
-                                {
-                                    "id": "5b639bcc-36ae-4800-b763-720e489aa049",
-                                    "flow": "",
-                                    "encryption": "none"
-                                }
-                            ]
-                        }
-                    ]
-                },
-                "streamSettings": {
-                    "network": "xhttp",
-                    "security": "tls",
-                    "tlsSettings": {
-                        "serverName": "a1.cloudworkpass.com",
-                        "alpn": ["h2", "http/1.1"],
-                        "fingerprint": "chrome",
-                        "allowInsecure": False
-                    },
-                    "xhttpSettings": {
-                        "path": "/",
-                        "host": "",
-                        "mode": "auto",
-                        "noGRPCHeader": False,
-                        "scMinPostsIntervalMs": "30",
-                        "xmux": {
-                            "maxConcurrency": "16-32",
-                            "maxConnections": 0,
-                            "cMaxReuseTimes": 0,
-                            "hMaxRequestTimes": "600-900",
-                            "hMaxReusableSecs": "1800-3000",
-                            "hKeepAlivePeriod": 0
-                        }
-                    }
-                }
+        "log": {"loglevel": "none"},
+        "inbounds": [{
+            "port": port,
+            "protocol": "socks",
+            "settings": {"auth": "noauth", "udp": True},
+            "sniffing": {"enabled": True, "destOverride": ["http", "tls"]}
+        }],
+        "outbounds": [{
+            "tag": "proxy",
+            "protocol": "vless",
+            "settings": {
+                "vnext": [{
+                    "address": ip,
+                    "port": 443,
+                    "users": [{"id": "5b639bcc-36ae-4800-b763-720e489aa049", "flow": "", "encryption": "none"}]
+                }]
             },
-            {
-                "protocol": "freedom",
-                "tag": "direct"
+            "streamSettings": {
+                "network": "xhttp",
+                "security": "tls",
+                "tlsSettings": {"serverName": "a1.cloudworkpass.com", "alpn": ["h2", "http/1.1"], "fingerprint": "chrome", "allowInsecure": False},
+                "xhttpSettings": {"path": "/", "host": "", "mode": "auto", "noGRPCHeader": False, "scMinPostsIntervalMs": "30", "xmux": {"maxConcurrency": "16-32", "maxConnections": 0, "cMaxReuseTimes": 0, "hMaxRequestTimes": "600-900", "hMaxReusableSecs": "1800-3000", "hKeepAlivePeriod": 0}}
             }
-        ]
+        }, {"protocol": "freedom", "tag": "direct"}]
     }
     return config
 
@@ -148,21 +100,12 @@ def check_ip(ip):
     
     # Start Xray Process
     try:
-        process = subprocess.Popen(
-            [XRAY_BIN, "-c", config_filename],
-            stdout=subprocess.DEVNULL, 
-            stderr=subprocess.DEVNULL
-        )
-        time.sleep(1) # Give it a moment to bind
+        process = subprocess.Popen([XRAY_BIN, "-c", config_filename], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1) # bind
         
-        # Test Connection using requests with SOCKS proxy
-        proxies = {
-            'http': f'socks5://127.0.0.1:{local_port}',
-            'https': f'socks5://127.0.0.1:{local_port}'
-        }
+        proxies = {'http': f'socks5://127.0.0.1:{local_port}', 'https': f'socks5://127.0.0.1:{local_port}'}
         
         start_time = time.time()
-        # We test connecting to Cloudflare trace or Google
         response = requests.get("https://cp.cloudflare.com", proxies=proxies, timeout=TIMEOUT)
         latency = int((time.time() - start_time) * 1000)
         
@@ -173,22 +116,12 @@ def check_ip(ip):
             print(f"{RED}[FAIL]    {ip} \tStatus: {response.status_code}{RESET}")
             return None
 
-    except requests.exceptions.Timeout:
-        print(f"{RED}[TIMEOUT] {ip}{RESET}")
-        return None
-    except requests.exceptions.RequestException as e:
-        print(f"{RED}[ERROR]   {ip} \t{e}{RESET}")
-        return None
-    except Exception as e:
-        print(f"{RED}[ERR]     {ip} \t{e}{RESET}")
+    except Exception:
+        # print(f"{RED}[FAIL]    {ip}{RESET}") # Minimal error logging
         return None
     finally:
-        # Cleanup
-        if process:
-            process.terminate()
-            process.wait()
-        if os.path.exists(config_filename):
-            os.remove(config_filename)
+        if process: process.terminate(); process.wait()
+        if os.path.exists(config_filename): os.remove(config_filename)
 
 def main():
     print(f"{CYAN}=== Cloudflare Clean IP Checker (VLESS/xHTTP) ==={RESET}")
@@ -196,58 +129,69 @@ def main():
     
     ips = []
     
-    # Input handling
+    # Check if run with file arg
     if len(sys.argv) > 1:
-        arg = sys.argv[1]
-        if os.path.isfile(arg):
-            with open(arg, 'r') as f:
-                ips = [line.strip() for line in f if line.strip()]
+        if os.path.isfile(sys.argv[1]):
+            with open(sys.argv[1], 'r') as f: ips = [l.strip() for l in f if l.strip()]
         else:
-            ips = [arg]
+            ips = [sys.argv[1]]
     else:
-        print(f"{YELLOW}Usage: python3 cf_checker.py <ip_list.txt> OR <single_ip>{RESET}")
-        # Default test IPs if no arg provided
-        print("Testing with sample IPs...")
-        ips = ["173.245.49.82", "162.159.135.42", "1.1.1.1"]
+        # Interactive Mode
+        print(f"\n{YELLOW}Choose Input Method:{RESET}")
+        if os.path.exists("ip.txt"):
+            use_file = input(f"File 'ip.txt' found. Use it? [Y/n]: ").strip().lower()
+            if use_file in ['', 'y', 'yes']:
+                with open("ip.txt", 'r') as f: ips = [l.strip() for l in f if l.strip()]
+        
+        if not ips:
+            print(f"Enter IPs manually (one per line). Type 'run' or press Enter on empty line to start:")
+            while True:
+                try:
+                    line = input("> ").strip()
+                    if not line or line.lower() == 'run': break
+                    ips.append(line)
+                except EOFError: break
 
-    print(f"Checking {len(ips)} IPs with {THREADS} threads...")
-    
+    if not ips:
+        print(f"{RED}No IPs provided. Exiting.{RESET}")
+        return
+
+    print(f"\n{CYAN}Checking {len(ips)} IPs with {THREADS} threads...{RESET}")
     valid_results = []
-    
     with ThreadPoolExecutor(max_workers=THREADS) as executor:
         future_to_ip = {executor.submit(check_ip, ip): ip for ip in ips}
         for future in as_completed(future_to_ip):
-            result = future.result()
-            if result:
-                valid_results.append(result)
+            res = future.result()
+            if res: valid_results.append(res)
 
-    # Save Results
     if valid_results:
         print(f"\n{GREEN}Found {len(valid_results)} valid IPs!{RESET}")
-        # Sort by latency
         valid_results.sort(key=lambda x: x[1])
         with open(RESULT_FILE, 'w') as f:
-            for ip, lat in valid_results:
-                f.write(f"{ip},{lat}\n")
+            for ip, lat in valid_results: f.write(f"{ip},{lat}\n")
         print(f"Saved to {RESULT_FILE}")
     else:
         print(f"\n{RED}No valid IPs found.{RESET}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nAborted.")
 EOF
 
 # 3. Install Python Dependencies
-echo -e "${GREEN}Installing Python libraries...${NC}"
-# Use --break-system-packages on newer Ubuntu/Debian versions if needed, or fallback to standard install
-pip3 install requests --quiet --break-system-packages 2>/dev/null || pip3 install requests --quiet || pip install requests --quiet
+echo -e "${GREEN}Installing Python libraries (requests, pysocks)...${NC}"
+# Use --break-system-packages on newer Ubuntu/Debian versions if needed
+pip3 install requests PySocks --quiet --break-system-packages 2>/dev/null || pip3 install requests PySocks --quiet || pip install requests PySocks --quiet
 
-# 4. Create Sample IP List if missing
-if [ ! -f "ip.txt" ]; then
-    echo -e "173.245.48.1\n162.159.135.42\n1.1.1.1\n1.0.0.1" > ip.txt
-    echo "Created sample ip.txt"
-fi
-
-# 5. Run Checker
+# 4. Run Checker
 echo -e "${GREEN}Starting Checker...${NC}"
-python3 cf_checker.py ip.txt
+
+# Check for TTY
+if [ -t 0 ]; then
+    python3 cf_checker.py
+else
+    # If piped via curl, force TTY for input
+    python3 cf_checker.py < /dev/tty
+fi

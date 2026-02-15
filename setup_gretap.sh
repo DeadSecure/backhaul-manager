@@ -192,23 +192,26 @@ SERVICE="$SERVICE_NAME"
 LOGFILE="/var/log/gretap-wd-${ID}.log"
 
 log() {
-    echo "[(\$(date)] \$1"
+    echo "[\$(date)] \$1" >> "\$LOGFILE"
 }
+
+# Initial Log
+log "Watchdog started for \$IFACE -> \$TARGET"
 
 while true; do
     FAIL=0
     
-    # Check 1: Interface Existence
+    # 1. Check Interface Existence
     if ! ip link show "\$IFACE" > /dev/null 2>&1; then
         log "CRITICAL: Interface \$IFACE missing!"
         FAIL=1
     fi
     
-    # Check 2: Ping (Only if interface exists)
+    # 2. Check Ping (Only if interface exists)
     if [ \$FAIL -eq 0 ]; then
-        # -c 3: Try 3 packets
+        # -c 6: Try 6 packets (More robust)
         # -W 2: Wait max 2 seconds per packet
-        if ! ping -c 3 -W 2 "\$TARGET" > /dev/null 2>&1; then
+        if ! ping -c 6 -W 2 "\$TARGET" > /dev/null 2>&1; then
             log "WARNING: Ping to \$TARGET failed."
             FAIL=1
         fi
@@ -216,15 +219,28 @@ while true; do
     
     # Action
     if [ \$FAIL -eq 1 ]; then
-        log "Repairing tunnel..."
-        systemctl restart "\$SERVICE"
-        sleep 5
+        log "Connection lost. Performing FULL RECREATION..."
+        
+        # STOP Service to prevent race conditions
+        systemctl stop "\$SERVICE"
+        
+        # FORCE Delete Interface (Cleanup for split-brain/zombies)
+        ip link set "\$IFACE" down 2>/dev/null
+        ip link del "\$IFACE" 2>/dev/null
+        
+        sleep 3
+        
+        # START Service
+        systemctl start "\$SERVICE"
+        
+        log "Service restarted. Waiting 30s for stability..."
+        sleep 30
         
         # Post-Repair Check
         if ping -c 1 -W 1 "\$TARGET" > /dev/null 2>&1; then
              log "RECOVERED: Tunnel is back up."
         else
-             log "ERROR: Repair attempt failed. Retrying in next cycle."
+             log "ERROR: Repair attempt failed. Will retry in next cycle."
         fi
     fi
     

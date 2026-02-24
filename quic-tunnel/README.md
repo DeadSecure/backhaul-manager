@@ -15,13 +15,13 @@ Bash script for installing and managing **PQT QUIC tunnels** with multi-tunnel s
 
 ## Quick Install
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Alireza2030/quic-tunnel/main/setup_pqt.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/quic-tunnel/setup_pqt.sh)
 ```
 
 ## Usage
 ```bash
 # Download and run
-curl -fsSL https://raw.githubusercontent.com/Alireza2030/quic-tunnel/main/setup_pqt.sh -o setup_pqt.sh
+curl -fsSL https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/quic-tunnel/setup_pqt.sh -o setup_pqt.sh
 chmod +x setup_pqt.sh
 sudo ./setup_pqt.sh
 ```

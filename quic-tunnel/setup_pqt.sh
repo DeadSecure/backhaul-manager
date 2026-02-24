@@ -48,12 +48,23 @@ install_pqt() {
     # Try GitHub download from backhaul-manager repo
     DL_URL="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/quic-tunnel/pqt"
     echo -e "${CYAN}Downloading from: ${DL_URL}${NC}"
+    echo ""
 
-    if wget -q --show-progress -O /tmp/pqt "$DL_URL" 2>/dev/null || curl -fSL -o /tmp/pqt "$DL_URL" 2>/dev/null; then
+    local dl_ok=false
+    if command -v wget &>/dev/null; then
+        wget --progress=bar:force -O /tmp/pqt "$DL_URL" 2>&1 && dl_ok=true
+    fi
+    if [[ "$dl_ok" == false ]] && command -v curl &>/dev/null; then
+        curl -fL --progress-bar -o /tmp/pqt "$DL_URL" && dl_ok=true
+    fi
+
+    echo ""
+    if [[ "$dl_ok" == true && -s /tmp/pqt ]]; then
         chmod +x /tmp/pqt
         mv /tmp/pqt "$PQT_BIN"
         echo -e "${GREEN}PQT installed successfully!${NC}"
     else
+        rm -f /tmp/pqt
         echo -e "${YELLOW}Download failed. Trying local copy...${NC}"
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         if [[ -f "$SCRIPT_DIR/pqt" ]]; then
@@ -254,8 +265,16 @@ setup_client() {
     FWD_COUNT=0
 
     while true; do
-        read -p "Listen port (or Enter to finish): " LISTEN_PORT
-        [[ -z "$LISTEN_PORT" ]] && break
+        if [[ $FWD_COUNT -eq 0 ]]; then
+            read -p "Listen port: " LISTEN_PORT
+            if [[ -z "$LISTEN_PORT" ]]; then
+                echo -e "  ${RED}At least one port is required! Try again.${NC}"
+                continue
+            fi
+        else
+            read -p "Listen port (or Enter to finish): " LISTEN_PORT
+            [[ -z "$LISTEN_PORT" ]] && break
+        fi
 
         read -p "Remote port [${LISTEN_PORT}]: " REMOTE_PORT
         REMOTE_PORT=${REMOTE_PORT:-$LISTEN_PORT}
@@ -266,12 +285,6 @@ setup_client() {
         FWD_COUNT=$((FWD_COUNT + 1))
         echo -e "  ${GREEN}Added: :${LISTEN_PORT} -> ${REMOTE_PORT}${NC}"
     done
-
-    if [[ $FWD_COUNT -eq 0 ]]; then
-        echo -e "${RED}At least one port forward is required!${NC}"
-        read -p "Press Enter to continue..."
-        return
-    fi
 
     # Sanitize server IP for filename (replace dots and colons)
     SAFE_IP=$(echo "$SERVER_IP" | tr '.:' '_')
@@ -839,6 +852,70 @@ show_config() {
 }
 
 # ==========================================
+# Edit Config
+# ==========================================
+edit_config() {
+    echo -e "${BLUE}--- Edit Config File ---${NC}"
+
+    local configs=()
+    local i=1
+    for cfg in ${CONFIG_DIR}/*.yaml; do
+        [[ ! -f "$cfg" ]] && continue
+        configs+=("$cfg")
+        echo "  $i) $(basename "$cfg")"
+        i=$((i+1))
+    done
+
+    if [[ ${#configs[@]} -eq 0 ]]; then
+        echo -e "${RED}No config files found${NC}"
+        read -p "Press Enter to continue..."
+        return
+    fi
+
+    echo "  0) Cancel"
+    read -p "Select config to edit: " CHOICE
+    [[ "$CHOICE" == "0" || -z "$CHOICE" ]] && return
+
+    local idx=$((CHOICE - 1))
+    if [[ $idx -lt 0 || $idx -ge ${#configs[@]} ]]; then
+        echo -e "${RED}Invalid choice${NC}"
+        return
+    fi
+
+    local cfg_file="${configs[$idx]}"
+
+    # Pick editor
+    local EDITOR_CMD=""
+    if command -v nano &>/dev/null; then
+        EDITOR_CMD="nano"
+    elif command -v vi &>/dev/null; then
+        EDITOR_CMD="vi"
+    elif command -v vim &>/dev/null; then
+        EDITOR_CMD="vim"
+    else
+        echo -e "${RED}No editor found (nano/vi/vim)${NC}"
+        read -p "Press Enter to continue..."
+        return
+    fi
+
+    echo -e "${CYAN}Opening ${cfg_file} with ${EDITOR_CMD}...${NC}"
+    $EDITOR_CMD "$cfg_file"
+
+    # Ask to restart related service
+    local svc_name="pqt-$(basename "$cfg_file" .yaml)"
+    if systemctl list-unit-files "${svc_name}.service" &>/dev/null; then
+        echo ""
+        read -p "Restart service '${svc_name}' to apply changes? (Y/n): " restart_ans
+        if [[ ! "$restart_ans" =~ ^[Nn]$ ]]; then
+            systemctl restart "$svc_name"
+            echo -e "${GREEN}Service '${svc_name}' restarted${NC}"
+        fi
+    fi
+
+    read -p "Press Enter to continue..."
+}
+
+# ==========================================
 # Restart Service
 # ==========================================
 restart_service() {
@@ -910,14 +987,15 @@ while true; do
     echo "  6) Check Connection"
     echo "  7) View Logs"
     echo "  8) View Config"
-    echo "  9) Restart Service"
+    echo "  9) Edit Config"
+    echo "  10) Restart Service"
     echo ""
     echo -e "${CYAN}--- Watchdog ---${NC}"
-    echo "  10) Setup Watchdog (Auto-Reconnect)"
+    echo "  11) Setup Watchdog (Auto-Reconnect)"
     echo ""
     echo -e "${CYAN}--- Uninstall ---${NC}"
-    echo "  11) Uninstall Service"
-    echo "  12) Full Uninstall (Everything)"
+    echo "  12) Uninstall Service"
+    echo "  13) Full Uninstall (Everything)"
     echo ""
     echo "  0) Exit"
     echo ""
@@ -952,15 +1030,18 @@ while true; do
             show_config
             ;;
         9)
-            restart_service
+            edit_config
             ;;
         10)
-            setup_watchdog
+            restart_service
             ;;
         11)
-            uninstall_menu
+            setup_watchdog
             ;;
         12)
+            uninstall_menu
+            ;;
+        13)
             full_uninstall
             ;;
         0)

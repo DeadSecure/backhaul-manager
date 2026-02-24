@@ -45,31 +45,8 @@ install_pqt() {
 
     echo -e "${YELLOW}Installing PQT...${NC}"
 
-    ARCH=$(uname -m)
-    case $ARCH in
-        x86_64)
-            DL_ARCH="amd64"
-            ;;
-        aarch64)
-            DL_ARCH="arm64"
-            ;;
-        *)
-            echo -e "${RED}Unsupported architecture: $ARCH${NC}"
-            echo -e "${YELLOW}Trying to copy from script directory...${NC}"
-            SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-            if [[ -f "$SCRIPT_DIR/pqt" ]]; then
-                cp "$SCRIPT_DIR/pqt" "$PQT_BIN"
-                chmod +x "$PQT_BIN"
-                echo -e "${GREEN}PQT installed from local file${NC}"
-                return 0
-            fi
-            echo -e "${RED}No local pqt binary found either. Aborting.${NC}"
-            return 1
-            ;;
-    esac
-
-    # Try GitHub download first
-    DL_URL="https://github.com/nikancloud/pqt/releases/latest/download/pqt-linux-${DL_ARCH}"
+    # Try GitHub download from backhaul-manager repo
+    DL_URL="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/quic-tunnel/pqt"
     echo -e "${CYAN}Downloading from: ${DL_URL}${NC}"
 
     if wget -q --show-progress -O /tmp/pqt "$DL_URL" 2>/dev/null || curl -fSL -o /tmp/pqt "$DL_URL" 2>/dev/null; then

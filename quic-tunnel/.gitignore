@@ -1,0 +1,4 @@
+pqt
+*.log
+*.tmp
+.DS_Store

@@ -18,6 +18,8 @@ NC='\033[0m'
 PQT_BIN="/usr/local/bin/pqt"
 CONFIG_DIR="/etc/pqt"
 LOG_DIR="/var/log/pqt"
+EXPECTED_SHA256="131208725ddeaca70c4b1265f102323f7174aac9ce9d3e5c8cd10bbf16c33966f"
+DL_URL="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/quic-tunnel/pqt"
 
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}This script must be run as root${NC}"
@@ -44,9 +46,6 @@ install_pqt() {
     fi
 
     echo -e "${YELLOW}Installing PQT...${NC}"
-
-    # Try GitHub download from backhaul-manager repo
-    DL_URL="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/quic-tunnel/pqt"
     echo -e "${CYAN}Downloading from: ${DL_URL}${NC}"
     echo ""
 
@@ -60,6 +59,17 @@ install_pqt() {
 
     echo ""
     if [[ "$dl_ok" == true && -s /tmp/pqt ]]; then
+        # Verify checksum
+        local actual_sha=$(sha256sum /tmp/pqt | awk '{print $1}')
+        if [[ "$actual_sha" != "$EXPECTED_SHA256" ]]; then
+            echo -e "${RED}Checksum MISMATCH!${NC}"
+            echo -e "  Expected: ${EXPECTED_SHA256}"
+            echo -e "  Got:      ${actual_sha}"
+            echo -e "${RED}File may be corrupted or tampered. Aborting.${NC}"
+            rm -f /tmp/pqt
+            return 1
+        fi
+        echo -e "${GREEN}Checksum verified OK${NC}"
         chmod +x /tmp/pqt
         mv /tmp/pqt "$PQT_BIN"
         echo -e "${GREEN}PQT installed successfully!${NC}"
@@ -76,6 +86,28 @@ install_pqt() {
             return 1
         fi
     fi
+}
+
+# ==========================================
+# Reinstall PQT (delete + fresh download)
+# ==========================================
+reinstall_pqt() {
+    echo -e "${BLUE}--- Reinstall PQT Binary ---${NC}"
+
+    if [[ -f "$PQT_BIN" ]]; then
+        local cur_sha=$(sha256sum "$PQT_BIN" | awk '{print $1}')
+        echo -e "Current binary: ${PQT_BIN}"
+        echo -e "Current SHA256: ${cur_sha}"
+        echo ""
+        echo -e "${YELLOW}Removing current binary...${NC}"
+        rm -f "$PQT_BIN"
+        echo -e "${GREEN}Removed.${NC}"
+    else
+        echo -e "${YELLOW}No existing binary found.${NC}"
+    fi
+
+    echo ""
+    install_pqt
 }
 
 # ==========================================
@@ -978,24 +1010,25 @@ while true; do
     echo ""
     echo -e "${CYAN}--- Setup ---${NC}"
     echo "  1) Install PQT"
-    echo "  2) Setup Server (Kharej)"
-    echo "  3) Setup Client (Iran) + Port Forward"
-    echo "  4) Add Ports to Existing Tunnel"
+    echo "  2) Reinstall PQT (Delete + Download)"
+    echo "  3) Setup Server (Kharej)"
+    echo "  4) Setup Client (Iran) + Port Forward"
+    echo "  5) Add Ports to Existing Tunnel"
     echo ""
     echo -e "${CYAN}--- Management ---${NC}"
-    echo "  5) List Tunnels / Status"
-    echo "  6) Check Connection"
-    echo "  7) View Logs"
-    echo "  8) View Config"
-    echo "  9) Edit Config"
-    echo "  10) Restart Service"
+    echo "  6) List Tunnels / Status"
+    echo "  7) Check Connection"
+    echo "  8) View Logs"
+    echo "  9) View Config"
+    echo "  10) Edit Config"
+    echo "  11) Restart Service"
     echo ""
     echo -e "${CYAN}--- Watchdog ---${NC}"
-    echo "  11) Setup Watchdog (Auto-Reconnect)"
+    echo "  12) Setup Watchdog (Auto-Reconnect)"
     echo ""
     echo -e "${CYAN}--- Uninstall ---${NC}"
-    echo "  12) Uninstall Service"
-    echo "  13) Full Uninstall (Everything)"
+    echo "  13) Uninstall Service"
+    echo "  14) Full Uninstall (Everything)"
     echo ""
     echo "  0) Exit"
     echo ""
@@ -1007,41 +1040,45 @@ while true; do
             read -p "Press Enter to continue..."
             ;;
         2)
-            install_pqt
-            setup_server
+            reinstall_pqt
+            read -p "Press Enter to continue..."
             ;;
         3)
             install_pqt
-            setup_client
+            setup_server
             ;;
         4)
-            add_ports
+            install_pqt
+            setup_client
             ;;
         5)
-            list_tunnels
+            add_ports
             ;;
         6)
-            check_connection
+            list_tunnels
             ;;
         7)
-            view_logs
+            check_connection
             ;;
         8)
-            show_config
+            view_logs
             ;;
         9)
-            edit_config
+            show_config
             ;;
         10)
-            restart_service
+            edit_config
             ;;
         11)
-            setup_watchdog
+            restart_service
             ;;
         12)
-            uninstall_menu
+            setup_watchdog
             ;;
         13)
+            uninstall_menu
+            ;;
+        14)
             full_uninstall
             ;;
         0)

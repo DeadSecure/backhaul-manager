@@ -18,7 +18,7 @@ NC='\033[0m'
 PQT_BIN="/usr/local/bin/pqt"
 CONFIG_DIR="/etc/pqt"
 LOG_DIR="/var/log/pqt"
-EXPECTED_SHA256="131208725ddeaca70c4b1265f102323f7174aac9ce9d3e5c8cd10bbf16c33966f"
+EXPECTED_SHA256="131208725ddeaca70c4b1265f102323f7174aac9ce9d3e5c8cd10bbf16c3966f"
 DL_URL="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/quic-tunnel/pqt"
 
 if [[ $EUID -ne 0 ]]; then

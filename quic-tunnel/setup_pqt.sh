@@ -149,6 +149,14 @@ setup_server() {
     read -p "OS fingerprint (linux/windows/macos) [linux]: " OS_MIMICRY
     OS_MIMICRY=${OS_MIMICRY:-linux}
 
+    # Blackout Detection
+    read -p "Enable Blackout Detection? (Y/n): " BLACKOUT_ANS
+    if [[ "$BLACKOUT_ANS" =~ ^[Nn]$ ]]; then
+        BLACKOUT_ENABLED="false"
+    else
+        BLACKOUT_ENABLED="true"
+    fi
+
     CONFIG_FILE="${CONFIG_DIR}/server-${TUNNEL_PORT}.yaml"
     SERVICE_NAME="pqt-server-${TUNNEL_PORT}"
 
@@ -209,6 +217,11 @@ antithrottle:
   multipath:
     enabled: false
     count: 3
+
+blackout:
+  enabled: ${BLACKOUT_ENABLED}
+  probes: ["dns", "ntp", "bgp", "https", "normal"]
+  timeout_s: 20
 EOF
 
     # Create systemd service
@@ -285,6 +298,14 @@ setup_client() {
 
     read -p "OS fingerprint (linux/windows/macos) [linux]: " OS_MIMICRY
     OS_MIMICRY=${OS_MIMICRY:-linux}
+
+    # Blackout Detection
+    read -p "Enable Blackout Detection? (Y/n): " BLACKOUT_ANS
+    if [[ "$BLACKOUT_ANS" =~ ^[Nn]$ ]]; then
+        BLACKOUT_ENABLED="false"
+    else
+        BLACKOUT_ENABLED="true"
+    fi
 
     # Port forwarding
     echo ""
@@ -383,6 +404,11 @@ antithrottle:
   multipath:
     enabled: false
     count: 3
+
+blackout:
+  enabled: ${BLACKOUT_ENABLED}
+  probes: ["dns", "ntp", "bgp", "https", "normal"]
+  timeout_s: 20
 EOF
 
     # Create systemd service

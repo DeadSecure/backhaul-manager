@@ -771,6 +771,203 @@ WDEOF
 }
 
 # ==========================================
+# Speed Watchdog (Client/Iran Only)
+# ==========================================
+SPEED_WD_SCRIPT="/usr/local/bin/pqt-speed-watchdog.sh"
+SPEED_WD_SERVICE="pqt-speed-watchdog"
+SPEED_WD_LOG="/var/log/pqt-speed-watchdog.log"
+
+deploy_speed_watchdog() {
+    echo -e "${BLUE}--- Deploy Speed Watchdog (Client/Iran) ---${NC}"
+    echo ""
+
+    # Check for client services
+    local client_svcs=()
+    for f in /etc/systemd/system/pqt-client-*.service; do
+        [[ ! -f "$f" ]] && continue
+        client_svcs+=("$(basename "$f" .service)")
+    done
+
+    if [[ ${#client_svcs[@]} -eq 0 ]]; then
+        echo -e "${RED}No PQT client services found!${NC}"
+        echo -e "${YELLOW}Speed watchdog only works on client (Iran) side.${NC}"
+        read -p "Press Enter to continue..."
+        return
+    fi
+
+    echo -e "${CYAN}Detected client tunnels:${NC}"
+    for s in "${client_svcs[@]}"; do
+        echo -e "  ${GREEN}*${NC} $s"
+    done
+    echo ""
+
+    # Threshold
+    read -p "Min upload speed threshold (Mbps) [5]: " THRESHOLD
+    THRESHOLD=${THRESHOLD:-5}
+
+    # Check interval
+    read -p "Check interval (seconds) [30]: " INTERVAL
+    INTERVAL=${INTERVAL:-30}
+
+    # Detect main network interface
+    local NET_IF=$(ip route | grep default | awk '{print $5}' | head -1)
+    if [[ -z "$NET_IF" ]]; then
+        NET_IF="eth0"
+    fi
+    read -p "Network interface [${NET_IF}]: " INPUT_IF
+    [[ ! -z "$INPUT_IF" ]] && NET_IF="$INPUT_IF"
+
+    echo ""
+    echo -e "${YELLOW}Settings:${NC}"
+    echo -e "  Threshold : ${THRESHOLD} Mbps"
+    echo -e "  Interval  : ${INTERVAL}s"
+    echo -e "  Interface : ${NET_IF}"
+    echo -e "  Services  : ${client_svcs[*]}"
+    echo ""
+
+    # Build services list string
+    local svc_list=""
+    for s in "${client_svcs[@]}"; do
+        svc_list="${svc_list} \"${s}\""
+    done
+
+    # Generate watchdog script
+    cat > "${SPEED_WD_SCRIPT}" << 'HEADER'
+#!/bin/bash
+# PQT Speed Watchdog — Client (Iran) Only
+# Monitors upload speed and restarts tunnels if below threshold
+HEADER
+
+    cat >> "${SPEED_WD_SCRIPT}" << EOF
+
+THRESHOLD_MBPS=${THRESHOLD}
+INTERVAL=${INTERVAL}
+INTERFACE="${NET_IF}"
+LOG_FILE="${SPEED_WD_LOG}"
+CLIENT_SERVICES=(${svc_list})
+FAIL_COUNT=0
+FAIL_LIMIT=3
+
+mkdir -p \$(dirname \$LOG_FILE)
+echo "[\$(date)] Speed watchdog started. Threshold=\${THRESHOLD_MBPS}Mbps Interface=\${INTERFACE}" >> \$LOG_FILE
+
+while true; do
+    # Read TX bytes before
+    TX1=\$(cat /sys/class/net/\${INTERFACE}/statistics/tx_bytes 2>/dev/null)
+    if [[ -z "\$TX1" ]]; then
+        echo "[\$(date)] ERROR: Cannot read interface \${INTERFACE}" >> \$LOG_FILE
+        sleep \$INTERVAL
+        continue
+    fi
+
+    sleep 5
+
+    # Read TX bytes after
+    TX2=\$(cat /sys/class/net/\${INTERFACE}/statistics/tx_bytes 2>/dev/null)
+
+    # Calculate speed in Mbps
+    DIFF=\$(( TX2 - TX1 ))
+    SPEED_MBPS=\$(echo "scale=2; \$DIFF * 8 / 5 / 1000000" | bc 2>/dev/null || echo "0")
+
+    # Compare with threshold
+    IS_LOW=\$(echo "\$SPEED_MBPS < \$THRESHOLD_MBPS" | bc 2>/dev/null || echo "0")
+
+    if [[ "\$IS_LOW" == "1" ]]; then
+        FAIL_COUNT=\$((FAIL_COUNT + 1))
+        echo "[\$(date)] LOW SPEED: \${SPEED_MBPS} Mbps (threshold: \${THRESHOLD_MBPS}). Fail \${FAIL_COUNT}/\${FAIL_LIMIT}" >> \$LOG_FILE
+
+        if [[ \$FAIL_COUNT -ge \$FAIL_LIMIT ]]; then
+            echo "[\$(date)] RESTARTING all client tunnels..." >> \$LOG_FILE
+            for svc in "\${CLIENT_SERVICES[@]}"; do
+                systemctl restart "\$svc"
+                echo "[\$(date)] Restarted: \$svc" >> \$LOG_FILE
+            done
+            FAIL_COUNT=0
+            sleep 10
+        fi
+    else
+        FAIL_COUNT=0
+    fi
+
+    sleep \$((INTERVAL - 5))
+done
+EOF
+
+    chmod +x "${SPEED_WD_SCRIPT}"
+
+    # Create systemd service
+    cat > "/etc/systemd/system/${SPEED_WD_SERVICE}.service" << EOF
+[Unit]
+Description=PQT Speed Watchdog (Client/Iran)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${SPEED_WD_SCRIPT}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now "${SPEED_WD_SERVICE}" &>/dev/null
+
+    echo -e "${GREEN}Speed watchdog deployed and started!${NC}"
+    echo -e "${CYAN}Log: ${SPEED_WD_LOG}${NC}"
+    read -p "Press Enter to continue..."
+}
+
+speed_watchdog_status() {
+    echo -e "${BLUE}--- Speed Watchdog Status ---${NC}"
+    echo ""
+
+    if [[ ! -f "/etc/systemd/system/${SPEED_WD_SERVICE}.service" ]]; then
+        echo -e "${YELLOW}Speed watchdog is not installed.${NC}"
+        read -p "Press Enter to continue..."
+        return
+    fi
+
+    echo -e "${CYAN}Service Status:${NC}"
+    systemctl status "${SPEED_WD_SERVICE}" --no-pager -l 2>/dev/null | head -10
+    echo ""
+
+    echo -e "${CYAN}Last 20 Log Lines:${NC}"
+    if [[ -f "${SPEED_WD_LOG}" ]]; then
+        tail -20 "${SPEED_WD_LOG}"
+    else
+        echo -e "${YELLOW}No log file yet.${NC}"
+    fi
+    echo ""
+    read -p "Press Enter to continue..."
+}
+
+remove_speed_watchdog() {
+    echo -e "${BLUE}--- Remove Speed Watchdog ---${NC}"
+    echo ""
+
+    if [[ ! -f "/etc/systemd/system/${SPEED_WD_SERVICE}.service" ]]; then
+        echo -e "${YELLOW}Speed watchdog is not installed.${NC}"
+        read -p "Press Enter to continue..."
+        return
+    fi
+
+    read -p "Remove speed watchdog? (y/N): " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        systemctl stop "${SPEED_WD_SERVICE}" 2>/dev/null
+        systemctl disable "${SPEED_WD_SERVICE}" 2>/dev/null
+        rm -f "/etc/systemd/system/${SPEED_WD_SERVICE}.service"
+        rm -f "${SPEED_WD_SCRIPT}"
+        systemctl daemon-reload
+        echo -e "${GREEN}Speed watchdog removed.${NC}"
+    else
+        echo -e "${YELLOW}Cancelled.${NC}"
+    fi
+    read -p "Press Enter to continue..."
+}
+
+# ==========================================
 # Uninstall Service
 # ==========================================
 uninstall_menu() {
@@ -1056,6 +1253,11 @@ while true; do
     echo "  13) Uninstall Service"
     echo "  14) Full Uninstall (Everything)"
     echo ""
+    echo -e "${CYAN}--- Speed Watchdog (Iran/Client) ---${NC}"
+    echo "  15) Deploy Speed Watchdog"
+    echo "  16) Speed Watchdog Status & Logs"
+    echo "  17) Remove Speed Watchdog"
+    echo ""
     echo "  0) Exit"
     echo ""
     read -p "Select: " OPTION
@@ -1100,6 +1302,15 @@ while true; do
             ;;
         12)
             setup_watchdog
+            ;;
+        15)
+            deploy_speed_watchdog
+            ;;
+        16)
+            speed_watchdog_status
+            ;;
+        17)
+            remove_speed_watchdog
             ;;
         13)
             uninstall_menu

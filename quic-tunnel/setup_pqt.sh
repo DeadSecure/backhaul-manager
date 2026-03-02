@@ -842,7 +842,7 @@ INTERFACE="${NET_IF}"
 LOG_FILE="${SPEED_WD_LOG}"
 CLIENT_SERVICES=(${svc_list})
 FAIL_COUNT=0
-FAIL_LIMIT=5
+FAIL_LIMIT=3
 
 mkdir -p \$(dirname \$LOG_FILE)
 echo "[\$(date)] Speed watchdog started. Threshold=\${THRESHOLD_MBPS}Mbps Interface=\${INTERFACE}" >> \$LOG_FILE

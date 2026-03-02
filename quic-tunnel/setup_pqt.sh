@@ -805,9 +805,6 @@ deploy_speed_watchdog() {
     read -p "Min upload speed threshold (Mbps) [5]: " THRESHOLD
     THRESHOLD=${THRESHOLD:-5}
 
-    # Check interval
-    read -p "Check interval (seconds) [30]: " INTERVAL
-    INTERVAL=${INTERVAL:-30}
 
     # Detect main network interface
     local NET_IF=$(ip route | grep default | awk '{print $5}' | head -1)
@@ -820,7 +817,7 @@ deploy_speed_watchdog() {
     echo ""
     echo -e "${YELLOW}Settings:${NC}"
     echo -e "  Threshold : ${THRESHOLD} Mbps"
-    echo -e "  Interval  : ${INTERVAL}s"
+    echo -e "  Check     : every 1 second"
     echo -e "  Interface : ${NET_IF}"
     echo -e "  Services  : ${client_svcs[*]}"
     echo ""
@@ -841,43 +838,38 @@ HEADER
     cat >> "${SPEED_WD_SCRIPT}" << EOF
 
 THRESHOLD_MBPS=${THRESHOLD}
-INTERVAL=${INTERVAL}
 INTERFACE="${NET_IF}"
 LOG_FILE="${SPEED_WD_LOG}"
 CLIENT_SERVICES=(${svc_list})
 FAIL_COUNT=0
-FAIL_LIMIT=3
+FAIL_LIMIT=5
 
 mkdir -p \$(dirname \$LOG_FILE)
 echo "[\$(date)] Speed watchdog started. Threshold=\${THRESHOLD_MBPS}Mbps Interface=\${INTERFACE}" >> \$LOG_FILE
 
+PREV_TX=\$(cat /sys/class/net/\${INTERFACE}/statistics/tx_bytes 2>/dev/null || echo 0)
+
 while true; do
-    # Read TX bytes before
-    TX1=\$(cat /sys/class/net/\${INTERFACE}/statistics/tx_bytes 2>/dev/null)
-    if [[ -z "\$TX1" ]]; then
-        echo "[\$(date)] ERROR: Cannot read interface \${INTERFACE}" >> \$LOG_FILE
-        sleep \$INTERVAL
+    sleep 1
+
+    CUR_TX=\$(cat /sys/class/net/\${INTERFACE}/statistics/tx_bytes 2>/dev/null)
+    if [[ -z "\$CUR_TX" ]]; then
         continue
     fi
 
-    sleep 5
+    DIFF=\$(( CUR_TX - PREV_TX ))
+    PREV_TX=\$CUR_TX
 
-    # Read TX bytes after
-    TX2=\$(cat /sys/class/net/\${INTERFACE}/statistics/tx_bytes 2>/dev/null)
+    # bytes/sec -> Mbps
+    SPEED_MBPS=\$(echo "scale=2; \$DIFF * 8 / 1000000" | bc 2>/dev/null || echo "0")
 
-    # Calculate speed in Mbps
-    DIFF=\$(( TX2 - TX1 ))
-    SPEED_MBPS=\$(echo "scale=2; \$DIFF * 8 / 5 / 1000000" | bc 2>/dev/null || echo "0")
-
-    # Compare with threshold
     IS_LOW=\$(echo "\$SPEED_MBPS < \$THRESHOLD_MBPS" | bc 2>/dev/null || echo "0")
 
     if [[ "\$IS_LOW" == "1" ]]; then
         FAIL_COUNT=\$((FAIL_COUNT + 1))
-        echo "[\$(date)] LOW SPEED: \${SPEED_MBPS} Mbps (threshold: \${THRESHOLD_MBPS}). Fail \${FAIL_COUNT}/\${FAIL_LIMIT}" >> \$LOG_FILE
 
         if [[ \$FAIL_COUNT -ge \$FAIL_LIMIT ]]; then
-            echo "[\$(date)] RESTARTING all client tunnels..." >> \$LOG_FILE
+            echo "[\$(date)] LOW SPEED for \${FAIL_COUNT}s (\${SPEED_MBPS} Mbps). RESTARTING..." >> \$LOG_FILE
             for svc in "\${CLIENT_SERVICES[@]}"; do
                 systemctl restart "\$svc"
                 echo "[\$(date)] Restarted: \$svc" >> \$LOG_FILE
@@ -888,8 +880,6 @@ while true; do
     else
         FAIL_COUNT=0
     fi
-
-    sleep \$((INTERVAL - 5))
 done
 EOF
 

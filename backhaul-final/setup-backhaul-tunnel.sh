@@ -70,13 +70,88 @@ check_root() {
 
 check_binary() {
     if [ ! -f "${BINARY_PATH}" ]; then
-        msg_err "Binary not found at ${BINARY_PATH}"
-        msg_warn "Please place 'backhaul_premium' binary in ${CORE_DIR}/"
-        exit 1
+        msg_warn "Binary not found at ${BINARY_PATH}"
+        msg_info "Use menu option 15 to download, or place 'backhaul_premium' in ${CORE_DIR}/"
+        return 1
     fi
     if [ ! -x "${BINARY_PATH}" ]; then
         chmod +x "${BINARY_PATH}"
         msg_info "Made binary executable."
+    fi
+    return 0
+}
+
+# ─── Download Binary ───────────────────────────────────────────
+
+download_binary() {
+    echo ""
+    echo -e " ${GREEN}${BOLD}>>> Download Backhaul Premium Binary${NC}"
+    print_line
+    echo ""
+    echo -e "  ${WHITE}1)${NC} Download from ${CYAN}Iran${NC} mirror  ${DIM}(ir.backhaul-dev.com)${NC}"
+    echo -e "  ${WHITE}2)${NC} Download from ${BLUE}Foreign${NC} mirror  ${DIM}(en.backhaul-dev.com)${NC}"
+    echo -e "  ${DIM}0)${NC} Cancel"
+    echo ""
+    read -p "  Select mirror: " mirror_choice
+
+    local base_url=""
+    case $mirror_choice in
+        1) base_url="http://ir.backhaul-dev.com:2095" ;;
+        2) base_url="http://en.backhaul-dev.com:2095" ;;
+        0) return ;;
+        *) msg_err "Invalid option."; return ;;
+    esac
+
+    # Detect architecture
+    local arch
+    arch=$(uname -m)
+    local filename=""
+    case $arch in
+        x86_64)  filename="backhaul_premium_amd64.tar.gz" ;;
+        aarch64) filename="backhaul_premium_arm64.tar.gz" ;;
+        *)       msg_err "Unsupported architecture: ${arch}"; return ;;
+    esac
+
+    local url="${base_url}/${filename}"
+    local tmp_file="/tmp/${filename}"
+
+    mkdir -p "${CORE_DIR}"
+
+    msg_info "Downloading: ${url}"
+    echo ""
+
+    if curl -L --ipv4 -o "${tmp_file}" "${url}" --progress-bar; then
+        msg_ok "Download complete."
+        msg_info "Extracting..."
+        # Remove old binary if exists
+        rm -f "${BINARY_PATH}" 2>/dev/null
+        # Extract tar.gz into CORE_DIR
+        tar xzf "${tmp_file}" -C "${CORE_DIR}" 2>/dev/null
+        # Find the extracted binary
+        if [ -f "${CORE_DIR}/backhaul_premium" ]; then
+            chmod +x "${BINARY_PATH}"
+            msg_ok "Binary installed: ${BINARY_PATH}"
+        elif [ -f "${CORE_DIR}/backhaul" ]; then
+            mv "${CORE_DIR}/backhaul" "${BINARY_PATH}"
+            chmod +x "${BINARY_PATH}"
+            msg_ok "Binary installed: ${BINARY_PATH}"
+        else
+            # Try to find any extracted binary
+            local found
+            found=$(find "${CORE_DIR}" -maxdepth 1 -name "backhaul*" -type f ! -name "*.toml" ! -name "*.gz" | head -1)
+            if [ -n "$found" ] && [ "$found" != "${BINARY_PATH}" ]; then
+                mv "$found" "${BINARY_PATH}"
+                chmod +x "${BINARY_PATH}"
+                msg_ok "Binary installed: ${BINARY_PATH}"
+            else
+                msg_err "Could not find binary after extraction."
+            fi
+        fi
+        # Cleanup
+        rm -f "${tmp_file}" 2>/dev/null
+    else
+        msg_err "Download failed. Check your connection."
+        rm -f "${tmp_file}" 2>/dev/null
     fi
 }
 
@@ -97,6 +172,31 @@ detect_interface() {
     fi
 
     echo "$iface"
+}
+
+# ─── Auto-Detect Public IP ────────────────────────────────────────
+
+detect_public_ip() {
+    local ip=""
+    local iface
+    iface=$(detect_interface)
+
+    # Try to get IP from the default interface
+    if [ -n "$iface" ]; then
+        ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+    fi
+
+    # Fallback: hostname -I
+    if [ -z "$ip" ]; then
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+
+    # Fallback: any non-lo IP
+    if [ -z "$ip" ]; then
+        ip=$(ip -4 addr show 2>/dev/null | grep -oP 'inet \K[0-9.]+' | grep -v '^127\.' | head -1)
+    fi
+
+    echo "$ip"
 }
 
 # ─── Input Helpers ────────────────────────────────────────────────
@@ -144,8 +244,16 @@ show_review_box() {
     echo -e "  ${CYAN}IPX Network:${NC}"
     echo -e "    Listen IP:       ${GREEN}${BOLD}${LISTEN_IP}${NC}"
     echo -e "    Dest IP:         ${BLUE}${BOLD}${DST_IP}${NC}"
+    echo -e "    Profile:         ${YELLOW}${BOLD}${PROFILE}${NC}"
     echo -e "    Interface:       ${WHITE}${BOLD}${INTERFACE}${NC}  ${DIM}(auto-detected)${NC}"
     echo -e "    Mode:            ${YELLOW}${BOLD}$([ \"$mode\" = \"iran\" ] && echo 'server' || echo 'client')${NC}"
+    if [ "$PROFILE" = "udp" ]; then
+        echo ""
+        print_line
+        echo -e "  ${CYAN}Spoof:${NC}"
+        echo -e "    Spoof Src IP:    ${MAGENTA}${BOLD}${SPOOF_SRC_IP}${NC}"
+        echo -e "    Spoof Dst IP:    ${MAGENTA}${BOLD}${SPOOF_DST_IP}${NC}"
+    fi
     echo ""
     print_line
     echo -e "  ${CYAN}Security:${NC}"
@@ -183,10 +291,10 @@ mtu = ${MTU}
 
 [ipx]
 mode = "server"
-profile = "bip"
+profile = "${PROFILE}"
 listen_ip = "${LISTEN_IP}"
 dst_ip = "${DST_IP}"
-interface = "${INTERFACE}"
+${SPOOF_BLOCK}interface = "${INTERFACE}"
 
 [security]
 enable_encryption = ${ENCRYPTION}
@@ -230,10 +338,10 @@ mtu = ${MTU}
 
 [ipx]
 mode = "client"
-profile = "bip"
+profile = "${PROFILE}"
 listen_ip = "${LISTEN_IP}"
 dst_ip = "${DST_IP}"
-interface = "${INTERFACE}"
+${SPOOF_BLOCK}interface = "${INTERFACE}"
 
 [security]
 enable_encryption = ${ENCRYPTION}
@@ -291,8 +399,12 @@ setup_iran() {
     # Auto-detect interface
     INTERFACE=$(detect_interface)
 
+    # Auto-detect public IP for listen_ip default
+    local AUTO_IP
+    AUTO_IP=$(detect_public_ip)
+
     # ── Step 1: Tunnel Identity ──
-    echo -e "\n ${MAGENTA}${BOLD}[1/4] Tunnel Identity${NC}"
+    echo -e "\n ${MAGENTA}${BOLD}[1/5] Tunnel Identity${NC}"
     read_input "Tunnel ID (e.g. 10, 12, 50)" "" TUNNEL_ID
     if [ -z "$TUNNEL_ID" ]; then
         msg_err "Tunnel ID is required!"
@@ -307,10 +419,13 @@ setup_iran() {
     REMOTE_TUN_ADDR="10.10.${TUNNEL_ID}.2/24"
 
     # ── Step 2: IPX Network ──
-    echo -e "\n ${MAGENTA}${BOLD}[2/4] IPX Network${NC}"
+    echo -e "\n ${MAGENTA}${BOLD}[2/5] IPX Network${NC}"
     msg_info "Interface auto-detected: ${BOLD}${INTERFACE}${NC}"
     read_input "Change interface? (press Enter to keep)" "${INTERFACE}" INTERFACE
-    read_input "Listen IP (this server's public IP)" "" LISTEN_IP
+    if [ -n "$AUTO_IP" ]; then
+        msg_info "Public IP auto-detected: ${BOLD}${AUTO_IP}${NC}"
+    fi
+    read_input "Listen IP (this server's public IP)" "${AUTO_IP}" LISTEN_IP
     if [ -z "$LISTEN_IP" ]; then
         msg_err "Listen IP is required!"
         exit 1
@@ -321,16 +436,41 @@ setup_iran() {
         exit 1
     fi
 
-    # ── Step 3: Security ──
-    echo -e "\n ${MAGENTA}${BOLD}[3/4] Security${NC}"
+    # ── Step 3: Profile (BIP or Spoof/UDP) ──
+    echo -e "\n ${MAGENTA}${BOLD}[3/5] IPX Profile${NC}"
+    echo -e "  ${WHITE}1)${NC} bip  ${DIM}(default, no spoofing)${NC}"
+    echo -e "  ${WHITE}2)${NC} udp  ${DIM}(spoof mode)${NC}"
+    read_input "Select profile (1 or 2)" "1" PROFILE_CHOICE
+    if [ "$PROFILE_CHOICE" = "2" ]; then
+        PROFILE="udp"
+        read_input "Spoof Source IP" "" SPOOF_SRC_IP
+        if [ -z "$SPOOF_SRC_IP" ]; then
+            msg_err "Spoof Source IP is required in UDP mode!"
+            exit 1
+        fi
+        read_input "Spoof Destination IP" "" SPOOF_DST_IP
+        if [ -z "$SPOOF_DST_IP" ]; then
+            msg_err "Spoof Destination IP is required in UDP mode!"
+            exit 1
+        fi
+        SPOOF_BLOCK=$(printf 'spoof_src_ip = "%s"\nspoof_dst_ip = "%s"\n' "${SPOOF_SRC_IP}" "${SPOOF_DST_IP}")
+    else
+        PROFILE="bip"
+        SPOOF_SRC_IP=""
+        SPOOF_DST_IP=""
+        SPOOF_BLOCK=""
+    fi
+
+    # ── Step 4: Security ──
+    echo -e "\n ${MAGENTA}${BOLD}[4/5] Security${NC}"
     read_input "Enable encryption (true/false)" "true" ENCRYPTION
     read_input "Algorithm" "aes-256-gcm" ALGORITHM
     echo -e "  ${DIM}Default PSK: ${DEFAULT_PSK}${NC}"
     read_input "PSK (Enter to use default)" "${DEFAULT_PSK}" PSK
     read_input "KDF iterations" "100000" KDF_ITERATIONS
 
-    # ── Step 4: Transport ──
-    echo -e "\n ${MAGENTA}${BOLD}[4/4] Transport & Logging${NC}"
+    # ── Step 5: Transport ──
+    echo -e "\n ${MAGENTA}${BOLD}[5/5] Transport & Logging${NC}"
     read_input "Heartbeat interval (sec)" "10" HEARTBEAT_INTERVAL
     read_input "Heartbeat timeout (sec)" "25" HEARTBEAT_TIMEOUT
     read_input "Log level (info/debug/warn/error)" "info" LOG_LEVEL
@@ -386,8 +526,12 @@ setup_kharej() {
     # Auto-detect interface
     INTERFACE=$(detect_interface)
 
+    # Auto-detect public IP for listen_ip default
+    local AUTO_IP
+    AUTO_IP=$(detect_public_ip)
+
     # ── Step 1: Tunnel Identity ──
-    echo -e "\n ${MAGENTA}${BOLD}[1/4] Tunnel Identity${NC}"
+    echo -e "\n ${MAGENTA}${BOLD}[1/5] Tunnel Identity${NC}"
     read_input "Tunnel ID (must match Iran, e.g. 10, 12, 50)" "" TUNNEL_ID
     if [ -z "$TUNNEL_ID" ]; then
         msg_err "Tunnel ID is required!"
@@ -402,10 +546,13 @@ setup_kharej() {
     REMOTE_TUN_ADDR="10.10.${TUNNEL_ID}.1/24"
 
     # ── Step 2: IPX Network ──
-    echo -e "\n ${MAGENTA}${BOLD}[2/4] IPX Network${NC}"
+    echo -e "\n ${MAGENTA}${BOLD}[2/5] IPX Network${NC}"
     msg_info "Interface auto-detected: ${BOLD}${INTERFACE}${NC}"
     read_input "Change interface? (press Enter to keep)" "${INTERFACE}" INTERFACE
-    read_input "Listen IP (this server's public IP)" "" LISTEN_IP
+    if [ -n "$AUTO_IP" ]; then
+        msg_info "Public IP auto-detected: ${BOLD}${AUTO_IP}${NC}"
+    fi
+    read_input "Listen IP (this server's public IP)" "${AUTO_IP}" LISTEN_IP
     if [ -z "$LISTEN_IP" ]; then
         msg_err "Listen IP is required!"
         exit 1
@@ -416,16 +563,42 @@ setup_kharej() {
         exit 1
     fi
 
-    # ── Step 3: Security ──
-    echo -e "\n ${MAGENTA}${BOLD}[3/4] Security${NC}"
+    # ── Step 3: Profile (BIP or Spoof/UDP) ──
+    echo -e "\n ${MAGENTA}${BOLD}[3/5] IPX Profile${NC}"
+    echo -e "  ${WHITE}1)${NC} bip  ${DIM}(default, no spoofing)${NC}"
+    echo -e "  ${WHITE}2)${NC} udp  ${DIM}(spoof mode)${NC}"
+    read_input "Select profile (1 or 2)" "1" PROFILE_CHOICE
+    if [ "$PROFILE_CHOICE" = "2" ]; then
+        PROFILE="udp"
+        msg_info "Note: In Kharej, spoof src/dst are SWAPPED vs Iran side."
+        read_input "Spoof Source IP (Iran's spoof_dst_ip)" "" SPOOF_SRC_IP
+        if [ -z "$SPOOF_SRC_IP" ]; then
+            msg_err "Spoof Source IP is required in UDP mode!"
+            exit 1
+        fi
+        read_input "Spoof Destination IP (Iran's spoof_src_ip)" "" SPOOF_DST_IP
+        if [ -z "$SPOOF_DST_IP" ]; then
+            msg_err "Spoof Destination IP is required in UDP mode!"
+            exit 1
+        fi
+        SPOOF_BLOCK=$(printf 'spoof_src_ip = "%s"\nspoof_dst_ip = "%s"\n' "${SPOOF_SRC_IP}" "${SPOOF_DST_IP}")
+    else
+        PROFILE="bip"
+        SPOOF_SRC_IP=""
+        SPOOF_DST_IP=""
+        SPOOF_BLOCK=""
+    fi
+
+    # ── Step 4: Security ──
+    echo -e "\n ${MAGENTA}${BOLD}[4/5] Security${NC}"
     read_input "Enable encryption (true/false)" "true" ENCRYPTION
     read_input "Algorithm" "aes-256-gcm" ALGORITHM
     echo -e "  ${DIM}Default PSK: ${DEFAULT_PSK}${NC}"
     read_input "PSK (Enter to use default, must match Iran)" "${DEFAULT_PSK}" PSK
     read_input "KDF iterations" "100000" KDF_ITERATIONS
 
-    # ── Step 4: Transport ──
-    echo -e "\n ${MAGENTA}${BOLD}[4/4] Transport & Logging${NC}"
+    # ── Step 5: Transport ──
+    echo -e "\n ${MAGENTA}${BOLD}[5/5] Transport & Logging${NC}"
     read_input "Heartbeat interval (sec)" "10" HEARTBEAT_INTERVAL
     read_input "Heartbeat timeout (sec)" "25" HEARTBEAT_TIMEOUT
     read_input "Log level (info/debug/warn/error)" "info" LOG_LEVEL
@@ -808,6 +981,9 @@ main_menu() {
         echo -e " ${BOLD}${WHITE}Danger${NC}"
         echo -e "  ${RED}11)${NC} Delete a Tunnel"
         echo ""
+        echo -e " ${BOLD}${WHITE}Install${NC}"
+        echo -e "  ${MAGENTA}15)${NC} Download Backhaul Binary"
+        echo ""
         echo -e "  ${DIM}0)${NC} Exit"
         echo ""
         read -p "  Select: " choice
@@ -827,6 +1003,7 @@ main_menu() {
             12) deploy_watchdog ;;
             13) watchdog_status ;;
             14) remove_watchdog ;;
+            15) download_binary ;;
             0)
                 echo -e "\n ${GREEN}Goodbye!${NC}\n"
                 exit 0

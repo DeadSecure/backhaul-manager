@@ -735,14 +735,17 @@ do_live_logs() {
 
 do_view_config() {
     pick_tunnel || return
-    local cfg=$(grep "ExecStart=" "${SYSTEMD_DIR}/${SELECTED_TUNNEL}.service" 2>/dev/null | sed 's/.*-c //')
-    if [ -n "$cfg" ] && [ -f "$cfg" ]; then
+    
+    # Target the config file directly based on the tunnel name
+    local cfg="${CORE_DIR}/${SELECTED_TUNNEL#backhaul-}.toml"
+    
+    if [ -f "$cfg" ]; then
         echo ""
         print_line
         cat "$cfg"
         print_line
     else
-        msg_err "Config file not found."
+        msg_err "Config file not found at ${cfg}."
     fi
 }
 

@@ -777,6 +777,44 @@ do_delete() {
     fi
 }
 
+# ─── Auto-Register Configs ────────────────────────────────────────
+
+scan_and_register() {
+    echo ""
+    echo -e " ${GREEN}${BOLD}>>> Scan & Register Manual Configs${NC}"
+    print_line
+    echo ""
+
+    if [ ! -d "${CORE_DIR}" ]; then
+        msg_err "Core directory ${CORE_DIR} does not exist."
+        return
+    fi
+
+    local found=0
+    for toml_file in "${CORE_DIR}"/*.toml; do
+        [ -f "$toml_file" ] || continue
+        
+        local filename=$(basename "$toml_file")
+        local tunnel_name="${filename%.toml}"
+        # Prevent double 'backhaul-' if the user already named the file backhaul-xxx.toml
+        local service_name="backhaul-${tunnel_name#backhaul-}"
+        
+        if [ ! -f "${SYSTEMD_DIR}/${service_name}.service" ]; then
+            msg_info "Found unregistered config: ${filename}"
+            create_systemd_service "${service_name}" "${toml_file}" "Backhaul Auto-Registered - ${tunnel_name#backhaul-}"
+            msg_ok "Service created and started: ${service_name}"
+            found=$((found+1))
+        fi
+    done
+
+    if [ "$found" -eq 0 ]; then
+        msg_warn "No unregistered .toml configs found in ${CORE_DIR}."
+    else
+        echo ""
+        msg_ok "Successfully registered ${found} new tunnel(s)."
+    fi
+}
+
 # ─── Watchdog (Kharej Only) ────────────────────────────────────────
 
 WATCHDOG_SCRIPT="/usr/local/bin/backhaul-watchdog.sh"
@@ -976,6 +1014,7 @@ main_menu() {
         echo ""
         echo -e " ${BOLD}${WHITE}Tunnels${NC}"
         echo -e "  ${CYAN}3)${NC} List All Tunnels"
+        echo -e "  ${BLUE}16)${NC} Scan & Register Config Files"
         echo -e "  ${GREEN}4)${NC} Start a Tunnel"
         echo -e "  ${YELLOW}5)${NC} Restart a Tunnel"
         echo -e "  ${YELLOW}6)${NC} Stop a Tunnel"
@@ -1017,6 +1056,7 @@ main_menu() {
             13) watchdog_status ;;
             14) remove_watchdog ;;
             15) download_binary ;;
+            16) scan_and_register ;;
             0)
                 echo -e "\n ${GREEN}Goodbye!${NC}\n"
                 exit 0

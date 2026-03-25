@@ -443,12 +443,12 @@ setup_iran() {
     read_input "Select profile (1 or 2)" "1" PROFILE_CHOICE
     if [ "$PROFILE_CHOICE" = "2" ]; then
         PROFILE="udp"
-        read_input "Spoof Source IP" "" SPOOF_SRC_IP
+        read_input "Spoof Source IP" "79.127.126.29" SPOOF_SRC_IP
         if [ -z "$SPOOF_SRC_IP" ]; then
             msg_err "Spoof Source IP is required in UDP mode!"
             exit 1
         fi
-        read_input "Spoof Destination IP" "" SPOOF_DST_IP
+        read_input "Spoof Destination IP" "185.129.116.237" SPOOF_DST_IP
         if [ -z "$SPOOF_DST_IP" ]; then
             msg_err "Spoof Destination IP is required in UDP mode!"
             exit 1
@@ -571,12 +571,12 @@ setup_kharej() {
     if [ "$PROFILE_CHOICE" = "2" ]; then
         PROFILE="udp"
         msg_info "Note: In Kharej, spoof src/dst are SWAPPED vs Iran side."
-        read_input "Spoof Source IP (Iran's spoof_dst_ip)" "" SPOOF_SRC_IP
+        read_input "Spoof Source IP (Iran's spoof_dst_ip)" "185.129.116.237" SPOOF_SRC_IP
         if [ -z "$SPOOF_SRC_IP" ]; then
             msg_err "Spoof Source IP is required in UDP mode!"
             exit 1
         fi
-        read_input "Spoof Destination IP (Iran's spoof_src_ip)" "" SPOOF_DST_IP
+        read_input "Spoof Destination IP (Iran's spoof_src_ip)" "79.127.126.29" SPOOF_DST_IP
         if [ -z "$SPOOF_DST_IP" ]; then
             msg_err "Spoof Destination IP is required in UDP mode!"
             exit 1

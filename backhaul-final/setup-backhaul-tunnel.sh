@@ -453,7 +453,7 @@ setup_iran() {
             msg_err "Spoof Destination IP is required in UDP mode!"
             exit 1
         fi
-        SPOOF_BLOCK=$(printf 'spoof_src_ip = "%s"\nspoof_dst_ip = "%s"\n' "${SPOOF_SRC_IP}" "${SPOOF_DST_IP}")
+        printf -v SPOOF_BLOCK 'spoof_src_ip = "%s"\nspoof_dst_ip = "%s"\n' "${SPOOF_SRC_IP}" "${SPOOF_DST_IP}"
     else
         PROFILE="bip"
         SPOOF_SRC_IP=""
@@ -581,7 +581,7 @@ setup_kharej() {
             msg_err "Spoof Destination IP is required in UDP mode!"
             exit 1
         fi
-        SPOOF_BLOCK=$(printf 'spoof_src_ip = "%s"\nspoof_dst_ip = "%s"\n' "${SPOOF_SRC_IP}" "${SPOOF_DST_IP}")
+        printf -v SPOOF_BLOCK 'spoof_src_ip = "%s"\nspoof_dst_ip = "%s"\n' "${SPOOF_SRC_IP}" "${SPOOF_DST_IP}"
     else
         PROFILE="bip"
         SPOOF_SRC_IP=""
@@ -754,11 +754,20 @@ do_delete() {
     if [ "$confirm" = "DELETE" ]; then
         systemctl stop "${SELECTED_TUNNEL}" 2>/dev/null
         systemctl disable "${SELECTED_TUNNEL}" 2>/dev/null
-        local cfg=$(grep "ExecStart=" "${SYSTEMD_DIR}/${SELECTED_TUNNEL}.service" 2>/dev/null | sed 's/.*-c //')
+        
+        # Extract config path safely
+        local cfg=""
+        cfg=$(grep "ExecStart=" "${SYSTEMD_DIR}/${SELECTED_TUNNEL}.service" 2>/dev/null | sed 's/.*-c[[:space:]]*//' | sed 's/[[:space:]]*$//' | tr -d '\r')
+        
         rm -f "${SYSTEMD_DIR}/${SELECTED_TUNNEL}.service"
-        [ -n "$cfg" ] && rm -f "$cfg"
+        if [ -n "$cfg" ] && [ -f "$cfg" ]; then
+            rm -f "$cfg"
+            msg_ok "${SELECTED_TUNNEL} and its config (${cfg}) deleted."
+        else
+            msg_ok "${SELECTED_TUNNEL} deleted. (Config file not found or already removed)"
+        fi
+        
         systemctl daemon-reload
-        msg_ok "${SELECTED_TUNNEL} deleted."
     else
         msg_warn "Cancelled."
     fi

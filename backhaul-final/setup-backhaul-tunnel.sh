@@ -755,12 +755,12 @@ do_delete() {
         systemctl stop "${SELECTED_TUNNEL}" 2>/dev/null
         systemctl disable "${SELECTED_TUNNEL}" 2>/dev/null
         
-        # Extract config path safely
-        local cfg=""
-        cfg=$(grep "ExecStart=" "${SYSTEMD_DIR}/${SELECTED_TUNNEL}.service" 2>/dev/null | sed 's/.*-c[[:space:]]*//' | sed 's/[[:space:]]*$//' | tr -d '\r')
+        # Target the config file directly based on the tunnel name
+        # e.g., 'backhaul-iran1234' -> 'iran1234.toml'
+        local cfg="${CORE_DIR}/${SELECTED_TUNNEL#backhaul-}.toml"
         
         rm -f "${SYSTEMD_DIR}/${SELECTED_TUNNEL}.service"
-        if [ -n "$cfg" ] && [ -f "$cfg" ]; then
+        if [ -f "$cfg" ]; then
             rm -f "$cfg"
             msg_ok "${SELECTED_TUNNEL} and its config (${cfg}) deleted."
         else
@@ -768,6 +768,7 @@ do_delete() {
         fi
         
         systemctl daemon-reload
+
     else
         msg_warn "Cancelled."
     fi

@@ -968,6 +968,10 @@ main_menu() {
             echo -e "  k) ${MAGENTA}Generate New Keys${NC}"
             echo -e "  u) ${CYAN}Update Binary${NC}"
             echo -e "  d) ${RED}Delete Service${NC}"
+            echo ""
+            echo -e "${CYAN}=== Port Forwarding ===${NC}"
+            echo -e "  p) ${GREEN}Port Forwards (add/list/delete)${NC}"
+            echo ""
             echo -e "  0) Exit"
             echo ""
             read -p "Select option: " choice
@@ -985,6 +989,7 @@ main_menu() {
                 k|K) generate_keys ;;
                 u|U) update_binary ;;
                 d|D) delete_service ;;
+                p|P) list_port_forwards ;;
                 0) echo -e "${GREEN}Bye!${NC}"; exit 0 ;;
                 *) echo -e "${RED}Invalid option${NC}"; sleep 1 ;;
             esac
@@ -999,6 +1004,7 @@ main_menu() {
             echo -e "  3) ${MAGENTA}Generate Crypto Keys${NC}"
             echo -e "  4) ${GREEN}Setup Server (Foreign)${NC}  — exit node, downloads from GitHub"
             echo -e "  5) ${BLUE}Setup Client (Iran)${NC}     — SOCKS5 proxy, downloads from Mirror"
+            echo -e "  6) ${CYAN}Add Port Forward${NC}        — forward port via SOCKS5 tunnel"
             echo -e "  0) Exit"
             echo ""
             read -p "Select option: " choice
@@ -1021,6 +1027,7 @@ main_menu() {
                     fi
                     setup_client
                     ;;
+                6) add_port_forward ;;
                 0) echo -e "${GREEN}Bye!${NC}"; exit 0 ;;
                 *) echo -e "${RED}Invalid option${NC}"; sleep 1 ;;
             esac
@@ -1043,6 +1050,203 @@ setup_menu() {
         0) return ;;
         *) echo -e "${RED}Invalid option${NC}" ;;
     esac
+}
+
+# ═══════════════════════════════════════════════════════════════
+# PORT FORWARDING (Iran Client Side — via SOCKS5)
+# ═══════════════════════════════════════════════════════════════
+
+PORTFWD_DIR="${CONFIG_DIR}/portfwd"
+
+install_socat() {
+    if command -v socat &>/dev/null; then
+        echo -e "${GREEN}[+] socat is already installed${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}[*] Installing socat...${NC}"
+    if command -v apt-get &>/dev/null; then
+        apt-get update -qq && apt-get install -y -qq socat
+    elif command -v yum &>/dev/null; then
+        yum install -y socat
+    elif command -v dnf &>/dev/null; then
+        dnf install -y socat
+    else
+        echo -e "${RED}[!] Cannot install socat. Install manually.${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}[+] socat installed${NC}"
+}
+
+add_port_forward() {
+    echo -e "${CYAN}${BOLD}"
+    echo "╔═══════════════════════════════════════════════════════════╗"
+    echo "║            ADD PORT FORWARD                              ║"
+    echo "║   Iran:PORT → SOCKS5 → spoof-tunnel → Destination      ║"
+    echo "╚═══════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    # Check socat
+    install_socat || return 1
+
+    # Get SOCKS5 info from config
+    local socks_port=1080
+    if [ -f "${CONFIG_DIR}/config.json" ]; then
+        local cfg_port=$(grep -o '"port": *[0-9]*' ${CONFIG_DIR}/config.json | head -1 | grep -o '[0-9]*$')
+        [ -n "$cfg_port" ] && socks_port=$cfg_port
+    fi
+
+    echo -e "${YELLOW}SOCKS5 proxy: 127.0.0.1:${socks_port}${NC}"
+    echo ""
+
+    # Listen port on Iran
+    read -p "Local Listen Port (on this Iran server, e.g. 443): " LOCAL_PORT
+    while [ -z "$LOCAL_PORT" ]; do
+        echo -e "${RED}[!] Required${NC}"
+        read -p "Local Listen Port: " LOCAL_PORT
+    done
+
+    # Destination
+    read -p "Destination IP (e.g. foreign server or final server): " DEST_IP
+    while [ -z "$DEST_IP" ]; do
+        echo -e "${RED}[!] Required${NC}"
+        read -p "Destination IP: " DEST_IP
+    done
+
+    read -p "Destination Port (default: same as local ${LOCAL_PORT}): " DEST_PORT
+    DEST_PORT=${DEST_PORT:-$LOCAL_PORT}
+
+    # Rule name
+    local rule_name="spoof-fwd-${LOCAL_PORT}"
+    local rule_service="${rule_name}.service"
+
+    # Create systemd service for this forward
+    cat > /etc/systemd/system/${rule_service} << FWDEOF
+[Unit]
+Description=Spoof Port Forward :${LOCAL_PORT} -> ${DEST_IP}:${DEST_PORT}
+After=network.target ${SERVICE_NAME}.service
+Requires=${SERVICE_NAME}.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:${LOCAL_PORT},fork,reuseaddr SOCKS4A:127.0.0.1:${DEST_IP}:${DEST_PORT},socksport=${socks_port}
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+FWDEOF
+
+    # Save rule info
+    mkdir -p ${PORTFWD_DIR}
+    echo "${LOCAL_PORT}|${DEST_IP}|${DEST_PORT}|${socks_port}" > ${PORTFWD_DIR}/${LOCAL_PORT}.rule
+
+    systemctl daemon-reload
+    systemctl enable ${rule_service} &>/dev/null
+    systemctl restart ${rule_service}
+
+    sleep 1
+    if systemctl is-active --quiet ${rule_service}; then
+        echo ""
+        echo -e "${GREEN}[+] Port Forward Active!${NC}"
+        echo -e "   ${CYAN}:${LOCAL_PORT}${NC} → SOCKS5 → ${CYAN}${DEST_IP}:${DEST_PORT}${NC}"
+    else
+        echo -e "${RED}[!] Failed to start. Check: journalctl -u ${rule_service}${NC}"
+    fi
+
+    press_enter
+}
+
+list_port_forwards() {
+    echo -e "${CYAN}[Active Port Forwards]${NC}"
+    echo ""
+
+    if [ ! -d "${PORTFWD_DIR}" ] || [ -z "$(ls ${PORTFWD_DIR}/*.rule 2>/dev/null)" ]; then
+        echo -e "${YELLOW}  No port forwards configured${NC}"
+        press_enter
+        return
+    fi
+
+    printf "  ${BOLD}%-8s %-6s %-20s %-8s %-10s${NC}\n" "#" "LOCAL" "DESTINATION" "SOCKS" "STATUS"
+    echo "  ---------------------------------------------------------------"
+
+    local idx=1
+    for rule_file in ${PORTFWD_DIR}/*.rule; do
+        local rule=$(cat $rule_file)
+        local lport=$(echo $rule | cut -d'|' -f1)
+        local dip=$(echo $rule | cut -d'|' -f2)
+        local dport=$(echo $rule | cut -d'|' -f3)
+        local sport=$(echo $rule | cut -d'|' -f4)
+        local svc_name="spoof-fwd-${lport}.service"
+
+        local status="${RED}Stopped${NC}"
+        systemctl is-active --quiet ${svc_name} && status="${GREEN}Running${NC}"
+
+        printf "  %-8s ${CYAN}%-6s${NC} ${BLUE}%-20s${NC} %-8s ${NC}" "$idx" ":$lport" "$dip:$dport" ":$sport"
+        echo -e "$status"
+        idx=$((idx + 1))
+    done
+
+    echo ""
+    echo -e "${YELLOW}Options:${NC}"
+    echo "  a) Add new forward"
+    echo "  d) Delete a forward"
+    echo "  r) Restart all forwards"
+    echo "  0) Back"
+    echo ""
+    read -p "Select: " fwd_action
+
+    case $fwd_action in
+        a|A) add_port_forward ;;
+        d|D) delete_port_forward ;;
+        r|R) restart_all_forwards ;;
+        0) return ;;
+    esac
+}
+
+delete_port_forward() {
+    if [ ! -d "${PORTFWD_DIR}" ] || [ -z "$(ls ${PORTFWD_DIR}/*.rule 2>/dev/null)" ]; then
+        echo -e "${YELLOW}  No port forwards to delete${NC}"
+        press_enter
+        return
+    fi
+
+    echo ""
+    read -p "Enter local port to delete (e.g. 443): " del_port
+
+    if [ -f "${PORTFWD_DIR}/${del_port}.rule" ]; then
+        local svc="spoof-fwd-${del_port}.service"
+        systemctl stop ${svc} 2>/dev/null
+        systemctl disable ${svc} 2>/dev/null
+        rm -f /etc/systemd/system/${svc}
+        rm -f ${PORTFWD_DIR}/${del_port}.rule
+        systemctl daemon-reload
+        echo -e "${GREEN}[+] Port forward :${del_port} deleted${NC}"
+    else
+        echo -e "${RED}[!] No forward found for port ${del_port}${NC}"
+    fi
+
+    press_enter
+}
+
+restart_all_forwards() {
+    if [ ! -d "${PORTFWD_DIR}" ]; then
+        echo -e "${YELLOW}  No forwards configured${NC}"
+        press_enter
+        return
+    fi
+
+    for rule_file in ${PORTFWD_DIR}/*.rule; do
+        local lport=$(basename $rule_file .rule)
+        local svc="spoof-fwd-${lport}.service"
+        systemctl restart ${svc} 2>/dev/null
+        if systemctl is-active --quiet ${svc}; then
+            echo -e "  :${lport} → ${GREEN}Restarted${NC}"
+        else
+            echo -e "  :${lport} → ${RED}Failed${NC}"
+        fi
+    done
+
+    press_enter
 }
 
 # ═══════════════════════════════════════════════════════════════

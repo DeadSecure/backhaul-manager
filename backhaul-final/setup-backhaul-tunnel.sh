@@ -88,71 +88,108 @@ download_binary() {
     echo -e " ${GREEN}${BOLD}>>> Download Backhaul Premium Binary${NC}"
     print_line
     echo ""
-    echo -e "  ${WHITE}1)${NC} Download from ${CYAN}Iran${NC} mirror  ${DIM}(ir.backhaul-dev.com)${NC}"
-    echo -e "  ${WHITE}2)${NC} Download from ${BLUE}Foreign${NC} mirror  ${DIM}(en.backhaul-dev.com)${NC}"
+    echo -e "  ${WHITE}1)${NC} Download from ${CYAN}Iran Mirror${NC}       ${DIM}(79.175.188.86 — direct binary)${NC}"
+    echo -e "  ${WHITE}2)${NC} Download from ${BLUE}GitHub Mirror${NC}     ${DIM}(github.com/alireza-2030 — direct binary)${NC}"
+    echo -e "  ${WHITE}3)${NC} Download from ${CYAN}Iran Official${NC}    ${DIM}(ir.backhaul-dev.com — tar.gz)${NC}"
+    echo -e "  ${WHITE}4)${NC} Download from ${BLUE}Foreign Official${NC} ${DIM}(en.backhaul-dev.com — tar.gz)${NC}"
     echo -e "  ${DIM}0)${NC} Cancel"
     echo ""
     read -p "  Select mirror: " mirror_choice
 
-    local base_url=""
+    mkdir -p "${CORE_DIR}"
+
     case $mirror_choice in
-        1) base_url="http://ir.backhaul-dev.com:2095" ;;
-        2) base_url="http://en.backhaul-dev.com:2095" ;;
+        1)
+            # Iran mirror — direct binary
+            local url="http://79.175.188.86:8090/backhaul-premium/bin/backhaul_premium"
+            msg_info "Downloading: ${url}"
+            echo ""
+            if curl -L --max-time 60 --progress-bar -o "${BINARY_PATH}" "${url}"; then
+                local fsize=$(stat -c%s "${BINARY_PATH}" 2>/dev/null || stat -f%z "${BINARY_PATH}" 2>/dev/null)
+                if [ "${fsize:-0}" -gt 1000000 ]; then
+                    chmod +x "${BINARY_PATH}"
+                    msg_ok "Binary installed: ${BINARY_PATH}"
+                else
+                    msg_err "Downloaded file is too small, download may have failed."
+                    rm -f "${BINARY_PATH}" 2>/dev/null
+                fi
+            else
+                msg_err "Download failed."
+            fi
+            ;;
+        2)
+            # GitHub mirror — direct binary
+            local url="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/backhaul-final/dist/backhaul_premium"
+            msg_info "Downloading: ${url}"
+            echo ""
+            if curl -L --max-time 60 --progress-bar -o "${BINARY_PATH}" "${url}"; then
+                local fsize=$(stat -c%s "${BINARY_PATH}" 2>/dev/null || stat -f%z "${BINARY_PATH}" 2>/dev/null)
+                if [ "${fsize:-0}" -gt 1000000 ]; then
+                    chmod +x "${BINARY_PATH}"
+                    msg_ok "Binary installed: ${BINARY_PATH}"
+                else
+                    msg_err "Downloaded file is too small, download may have failed."
+                    rm -f "${BINARY_PATH}" 2>/dev/null
+                fi
+            else
+                msg_err "Download failed."
+            fi
+            ;;
+        3|4)
+            # Official mirrors — tar.gz format
+            local base_url=""
+            if [ "$mirror_choice" = "3" ]; then
+                base_url="http://ir.backhaul-dev.com:2095"
+            else
+                base_url="http://en.backhaul-dev.com:2095"
+            fi
+
+            local arch=$(uname -m)
+            local filename=""
+            case $arch in
+                x86_64)  filename="backhaul_premium_amd64.tar.gz" ;;
+                aarch64) filename="backhaul_premium_arm64.tar.gz" ;;
+                *)       msg_err "Unsupported architecture: ${arch}"; return ;;
+            esac
+
+            local url="${base_url}/${filename}"
+            local tmp_file="/tmp/${filename}"
+
+            msg_info "Downloading: ${url}"
+            echo ""
+
+            if curl -L --ipv4 -o "${tmp_file}" "${url}" --progress-bar; then
+                msg_ok "Download complete."
+                msg_info "Extracting..."
+                rm -f "${BINARY_PATH}" 2>/dev/null
+                tar xzf "${tmp_file}" -C "${CORE_DIR}" 2>/dev/null
+                if [ -f "${CORE_DIR}/backhaul_premium" ]; then
+                    chmod +x "${BINARY_PATH}"
+                    msg_ok "Binary installed: ${BINARY_PATH}"
+                elif [ -f "${CORE_DIR}/backhaul" ]; then
+                    mv "${CORE_DIR}/backhaul" "${BINARY_PATH}"
+                    chmod +x "${BINARY_PATH}"
+                    msg_ok "Binary installed: ${BINARY_PATH}"
+                else
+                    local found
+                    found=$(find "${CORE_DIR}" -maxdepth 1 -name "backhaul*" -type f ! -name "*.toml" ! -name "*.gz" | head -1)
+                    if [ -n "$found" ] && [ "$found" != "${BINARY_PATH}" ]; then
+                        mv "$found" "${BINARY_PATH}"
+                        chmod +x "${BINARY_PATH}"
+                        msg_ok "Binary installed: ${BINARY_PATH}"
+                    else
+                        msg_err "Could not find binary after extraction."
+                    fi
+                fi
+                rm -f "${tmp_file}" 2>/dev/null
+            else
+                msg_err "Download failed. Check your connection."
+                rm -f "${tmp_file}" 2>/dev/null
+            fi
+            ;;
         0) return ;;
         *) msg_err "Invalid option."; return ;;
     esac
-
-    # Detect architecture
-    local arch
-    arch=$(uname -m)
-    local filename=""
-    case $arch in
-        x86_64)  filename="backhaul_premium_amd64.tar.gz" ;;
-        aarch64) filename="backhaul_premium_arm64.tar.gz" ;;
-        *)       msg_err "Unsupported architecture: ${arch}"; return ;;
-    esac
-
-    local url="${base_url}/${filename}"
-    local tmp_file="/tmp/${filename}"
-
-    mkdir -p "${CORE_DIR}"
-
-    msg_info "Downloading: ${url}"
-    echo ""
-
-    if curl -L --ipv4 -o "${tmp_file}" "${url}" --progress-bar; then
-        msg_ok "Download complete."
-        msg_info "Extracting..."
-        # Remove old binary if exists
-        rm -f "${BINARY_PATH}" 2>/dev/null
-        # Extract tar.gz into CORE_DIR
-        tar xzf "${tmp_file}" -C "${CORE_DIR}" 2>/dev/null
-        # Find the extracted binary
-        if [ -f "${CORE_DIR}/backhaul_premium" ]; then
-            chmod +x "${BINARY_PATH}"
-            msg_ok "Binary installed: ${BINARY_PATH}"
-        elif [ -f "${CORE_DIR}/backhaul" ]; then
-            mv "${CORE_DIR}/backhaul" "${BINARY_PATH}"
-            chmod +x "${BINARY_PATH}"
-            msg_ok "Binary installed: ${BINARY_PATH}"
-        else
-            # Try to find any extracted binary
-            local found
-            found=$(find "${CORE_DIR}" -maxdepth 1 -name "backhaul*" -type f ! -name "*.toml" ! -name "*.gz" | head -1)
-            if [ -n "$found" ] && [ "$found" != "${BINARY_PATH}" ]; then
-                mv "$found" "${BINARY_PATH}"
-                chmod +x "${BINARY_PATH}"
-                msg_ok "Binary installed: ${BINARY_PATH}"
-            else
-                msg_err "Could not find binary after extraction."
-            fi
-        fi
-        # Cleanup
-        rm -f "${tmp_file}" 2>/dev/null
-    else
-        msg_err "Download failed. Check your connection."
-        rm -f "${tmp_file}" 2>/dev/null
-    fi
 }
 
 # ─── Auto-Detect Network Interface ───────────────────────────────

@@ -227,13 +227,14 @@ select_transport() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# SERVER SETUP (IRAN)
+# SERVER SETUP (FOREIGN — Exit Node)
 # ═══════════════════════════════════════════════════════════════
 
 setup_server() {
     echo -e "${GREEN}${BOLD}"
     echo "╔═══════════════════════════════════════════════════════════╗"
-    echo "║              SERVER SETUP (IRAN SIDE)                    ║"
+    echo "║         SERVER SETUP (FOREIGN — Exit Node)               ║"
+    echo "║         Receives tunnel traffic & relays to internet     ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 
@@ -256,7 +257,7 @@ setup_server() {
     echo -e "${CYAN}--- Spoof Configuration ---${NC}"
     echo -e "${YELLOW}  source_ip     = IP this server CLAIMS when sending packets${NC}"
     echo -e "${YELLOW}  peer_spoof_ip = Expected spoof IP of incoming CLIENT packets${NC}"
-    echo -e "${YELLOW}  client_real_ip= Client's ACTUAL real IP (for routing replies)${NC}"
+    echo -e "${YELLOW}  client_real_ip= Iran Client's ACTUAL real IP (for routing replies)${NC}"
     echo ""
 
     read -p "Server Spoof Source IP (source_ip): " SPOOF_SRC_IP
@@ -271,10 +272,10 @@ setup_server() {
         read -p "Expected Client Spoof IP (peer_spoof_ip): " PEER_SPOOF_IP
     done
 
-    read -p "Client Real IP (client_real_ip): " CLIENT_REAL_IP
+    read -p "Iran Client Real IP (client_real_ip): " CLIENT_REAL_IP
     while [ -z "$CLIENT_REAL_IP" ]; do
         echo -e "${RED}[!] This field is required${NC}"
-        read -p "Client Real IP (client_real_ip): " CLIENT_REAL_IP
+        read -p "Iran Client Real IP (client_real_ip): " CLIENT_REAL_IP
     done
 
     # Crypto
@@ -384,7 +385,7 @@ SERVEOF
     echo -e "  Client Real:   ${BLUE}${CLIENT_REAL_IP}${NC}"
     echo -e "  Server IP:     ${BLUE}${default_ip}${NC}"
     echo ""
-    echo -e "${YELLOW}For client setup, use:${NC}"
+    echo -e "${YELLOW}For Iran CLIENT setup, use:${NC}"
     echo -e "  Server Address: ${CYAN}${default_ip}${NC}"
     echo ""
 
@@ -394,13 +395,14 @@ SERVEOF
 }
 
 # ═══════════════════════════════════════════════════════════════
-# CLIENT SETUP (FOREIGN)
+# CLIENT SETUP (IRAN — User Side, SOCKS5 Proxy)
 # ═══════════════════════════════════════════════════════════════
 
 setup_client() {
     echo -e "${BLUE}${BOLD}"
     echo "╔═══════════════════════════════════════════════════════════╗"
-    echo "║             CLIENT SETUP (FOREIGN SIDE)                  ║"
+    echo "║          CLIENT SETUP (IRAN — User Side)                 ║"
+    echo "║          SOCKS5 proxy opens here for users               ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 
@@ -410,10 +412,10 @@ setup_client() {
     # Server address
     echo ""
     echo -e "${CYAN}--- Server Connection ---${NC}"
-    read -p "Iran Server Real IP: " SERVER_ADDR
+    read -p "Foreign Server Real IP: " SERVER_ADDR
     while [ -z "$SERVER_ADDR" ]; do
         echo -e "${RED}[!] This field is required${NC}"
-        read -p "Iran Server Real IP: " SERVER_ADDR
+        read -p "Foreign Server Real IP: " SERVER_ADDR
     done
 
     local server_port=8080
@@ -992,30 +994,30 @@ main_menu() {
             echo ""
 
             echo -e "${CYAN}=== Initial Setup ===${NC}"
-            echo -e "  1) ${GREEN}Install Binary — Iran Server${NC}  (download from Mirror)"
-            echo -e "  2) ${BLUE}Install Binary — Foreign Server${NC}  (download from GitHub)"
+            echo -e "  1) ${GREEN}Install Binary — Foreign Server${NC}  (download from GitHub)"
+            echo -e "  2) ${BLUE}Install Binary — Iran Client${NC}    (download from Mirror)"
             echo -e "  3) ${MAGENTA}Generate Crypto Keys${NC}"
-            echo -e "  4) ${GREEN}Setup Server (Iran)${NC}   — auto downloads from Mirror"
-            echo -e "  5) ${BLUE}Setup Client (Foreign)${NC} — auto downloads from GitHub"
+            echo -e "  4) ${GREEN}Setup Server (Foreign)${NC}  — exit node, downloads from GitHub"
+            echo -e "  5) ${BLUE}Setup Client (Iran)${NC}     — SOCKS5 proxy, downloads from Mirror"
             echo -e "  0) Exit"
             echo ""
             read -p "Select option: " choice
 
             case $choice in
-                1) install_binary "iran"; press_enter ;;
-                2) install_binary "foreign"; press_enter ;;
+                1) install_binary "foreign"; press_enter ;;
+                2) install_binary "iran"; press_enter ;;
                 3) generate_keys ;;
                 4)
                     if [ ! -f "${BINARY_PATH}" ]; then
-                        echo -e "${YELLOW}[*] Binary not found. Installing from Mirror...${NC}"
-                        install_binary "iran" || continue
+                        echo -e "${YELLOW}[*] Binary not found. Installing from GitHub...${NC}"
+                        install_binary "foreign" || continue
                     fi
                     setup_server
                     ;;
                 5)
                     if [ ! -f "${BINARY_PATH}" ]; then
-                        echo -e "${YELLOW}[*] Binary not found. Installing from GitHub...${NC}"
-                        install_binary "foreign" || continue
+                        echo -e "${YELLOW}[*] Binary not found. Installing from Mirror...${NC}"
+                        install_binary "iran" || continue
                     fi
                     setup_client
                     ;;
@@ -1029,8 +1031,8 @@ main_menu() {
 setup_menu() {
     echo ""
     echo -e "${CYAN}Select setup type:${NC}"
-    echo -e "  1) ${GREEN}Server (Iran)${NC}"
-    echo -e "  2) ${BLUE}Client (Foreign)${NC}"
+    echo -e "  1) ${GREEN}Server (Foreign — Exit Node)${NC}"
+    echo -e "  2) ${BLUE}Client (Iran — SOCKS5 Proxy)${NC}"
     echo -e "  0) Back"
     echo ""
     read -p "Select: " server_type

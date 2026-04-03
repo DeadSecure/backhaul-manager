@@ -5,6 +5,8 @@
 # ║  Iran (Server) & Kharej (Client) - Peer-to-Peer IPX Tunnel   ║
 # ╚════════════════════════════════════════════════════════════════╝
 
+VERSION="1.0.0"
+
 # ─── Colors ───────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -38,12 +40,18 @@ print_double_line() {
 
 print_header() {
     clear
+    local server_ip
+    server_ip=$(detect_public_ip 2>/dev/null)
     echo ""
     echo -e "${CYAN}${BOLD}"
     echo " ╔════════════════════════════════════════════════╗"
     echo " ║     SPOOF TUNNEL CORE - Setup & Manager       ║"
+    echo -e " ║     ${DIM}v${VERSION}${CYAN}${BOLD}                                      ║"
     echo " ╚════════════════════════════════════════════════╝"
     echo -e "${NC}"
+    if [ -n "$server_ip" ]; then
+        echo -e "  ${DIM}Server IP: ${WHITE}${BOLD}${server_ip}${NC}"
+    fi
 }
 
 msg_info() {
@@ -271,9 +279,6 @@ LimitMEMLOCK=infinity
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/dev/net/tun
 PrivateTmp=yes
 
 [Install]

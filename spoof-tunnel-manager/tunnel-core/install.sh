@@ -1,11 +1,11 @@
 #!/bin/bash
 # ──────────────────────────────────────────────────────────────
-# Spoof Tunnel Core — Installer & Service Manager
+# Spoof Tunnel Core — One-Line Installer
 # Usage:
-#   bash install.sh install        → Install binary + systemd service
-#   bash install.sh uninstall      → Stop + remove everything
-#   bash install.sh status         → Show service status
-#   bash install.sh logs           → Show live logs
+#   bash <(curl -sL https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/spoof-tunnel-manager/tunnel-core/install.sh) install
+#   bash install.sh uninstall
+#   bash install.sh status
+#   bash install.sh logs
 # ──────────────────────────────────────────────────────────────
 set -e
 
@@ -14,6 +14,7 @@ INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/spoof-tunnel"
 SERVICE_NAME="spoof-tunnel"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+REPO_RAW="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/spoof-tunnel-manager/tunnel-core"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -41,28 +42,20 @@ do_install() {
     check_root
     print_banner
 
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    LOCAL_BINARY="${SCRIPT_DIR}/${BINARY_NAME}"
-
-    if [ ! -f "$LOCAL_BINARY" ]; then
-        echo -e "${RED}Error: Binary '${BINARY_NAME}' not found in ${SCRIPT_DIR}${NC}"
-        echo "Build it first: GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o ${BINARY_NAME} ."
-        exit 1
-    fi
-
-    # 1. Install binary
-    echo -e "${YELLOW}[1/4] Installing binary...${NC}"
-    cp "$LOCAL_BINARY" "${INSTALL_DIR}/${BINARY_NAME}"
-    chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+    # 1. Download binary directly
+    echo -e "${YELLOW}[1/4] Downloading binary...${NC}"
+    curl -sL "${REPO_RAW}/${BINARY_NAME}" -o "/tmp/${BINARY_NAME}"
+    chmod +x "/tmp/${BINARY_NAME}"
+    mv "/tmp/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     echo -e "${GREEN}  -> ${INSTALL_DIR}/${BINARY_NAME}${NC}"
 
-    # 2. Create config directory
+    # 2. Create config directory + sample config
     echo -e "${YELLOW}[2/4] Setting up config...${NC}"
     mkdir -p "$CONFIG_DIR"
     if [ ! -f "${CONFIG_DIR}/config.toml" ]; then
-        cp "${SCRIPT_DIR}/config-sample.toml" "${CONFIG_DIR}/config.toml" 2>/dev/null || true
-        echo -e "${GREEN}  -> Sample config copied to ${CONFIG_DIR}/config.toml${NC}"
-        echo -e "${YELLOW}  !! Edit ${CONFIG_DIR}/config.toml before starting the service !!${NC}"
+        curl -sL "${REPO_RAW}/config-sample.toml" -o "${CONFIG_DIR}/config.toml"
+        echo -e "${GREEN}  -> Sample config downloaded to ${CONFIG_DIR}/config.toml${NC}"
+        echo -e "${YELLOW}  !! Edit ${CONFIG_DIR}/config.toml before starting !!${NC}"
     else
         echo -e "${GREEN}  -> Config already exists, skipping${NC}"
     fi
@@ -85,7 +78,6 @@ LimitMEMLOCK=infinity
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 
-# Security hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

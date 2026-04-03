@@ -1,8 +1,8 @@
 #!/bin/bash
 # ──────────────────────────────────────────────────────────────
-# Spoof Tunnel Core — One-Line Installer
+# Spoof Tunnel Core — One-Line Installer (with Iran Mirror)
 # Usage:
-#   bash <(curl -sL https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/spoof-tunnel-manager/tunnel-core/install.sh) install
+#   bash <(curl -sL URL) install
 #   bash install.sh uninstall
 #   bash install.sh status
 #   bash install.sh logs
@@ -14,7 +14,10 @@ INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/spoof-tunnel"
 SERVICE_NAME="spoof-tunnel"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-REPO_RAW="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/spoof-tunnel-manager/tunnel-core"
+
+# Mirror (Iran) → GitHub fallback
+MIRROR_URL="http://79.175.188.86:8443/spoof-tunnel"
+GITHUB_URL="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/spoof-tunnel-manager/tunnel-core"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -38,24 +41,47 @@ check_root() {
     fi
 }
 
+# Try mirror first, fallback to GitHub
+download_file() {
+    local filename="$1"
+    local output="$2"
+
+    echo -e "  Trying Iran mirror..."
+    if curl -sf --connect-timeout 5 --max-time 30 "${MIRROR_URL}/${filename}" -o "$output" 2>/dev/null; then
+        echo -e "${GREEN}  -> Downloaded from mirror${NC}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}  Mirror unavailable, trying GitHub...${NC}"
+    if curl -sfL --connect-timeout 10 --max-time 60 "${GITHUB_URL}/${filename}" -o "$output" 2>/dev/null; then
+        echo -e "${GREEN}  -> Downloaded from GitHub${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}  Failed to download ${filename} from both sources${NC}"
+    return 1
+}
+
 do_install() {
     check_root
     print_banner
 
-    # 1. Download binary directly
+    # 1. Download binary
     echo -e "${YELLOW}[1/4] Downloading binary...${NC}"
-    curl -sL "${REPO_RAW}/${BINARY_NAME}" -o "/tmp/${BINARY_NAME}"
+    if ! download_file "$BINARY_NAME" "/tmp/${BINARY_NAME}"; then
+        exit 1
+    fi
     chmod +x "/tmp/${BINARY_NAME}"
     mv "/tmp/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
-    echo -e "${GREEN}  -> ${INSTALL_DIR}/${BINARY_NAME}${NC}"
+    echo -e "${GREEN}  -> Installed to ${INSTALL_DIR}/${BINARY_NAME}${NC}"
 
-    # 2. Create config directory + sample config
+    # 2. Download sample config
     echo -e "${YELLOW}[2/4] Setting up config...${NC}"
     mkdir -p "$CONFIG_DIR"
     if [ ! -f "${CONFIG_DIR}/config.toml" ]; then
-        curl -sL "${REPO_RAW}/config-sample.toml" -o "${CONFIG_DIR}/config.toml"
-        echo -e "${GREEN}  -> Sample config downloaded to ${CONFIG_DIR}/config.toml${NC}"
-        echo -e "${YELLOW}  !! Edit ${CONFIG_DIR}/config.toml before starting !!${NC}"
+        if download_file "config-sample.toml" "${CONFIG_DIR}/config.toml"; then
+            echo -e "${YELLOW}  !! Edit ${CONFIG_DIR}/config.toml before starting !!${NC}"
+        fi
     else
         echo -e "${GREEN}  -> Config already exists, skipping${NC}"
     fi

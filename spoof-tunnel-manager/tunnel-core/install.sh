@@ -1,95 +1,269 @@
 #!/bin/bash
-# ──────────────────────────────────────────────────────────────
-# Spoof Tunnel Core — Interactive Manager
-# ──────────────────────────────────────────────────────────────
-set -e
 
-BINARY_NAME="spoof-tunnel-core"
-INSTALL_DIR="/usr/local/bin"
-CONFIG_DIR="/etc/spoof-tunnel"
-CONFIG_FILE="${CONFIG_DIR}/config.toml"
-SERVICE_NAME="spoof-tunnel"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+# ╔════════════════════════════════════════════════════════════════╗
+# ║  SPOOF TUNNEL CORE - Setup & Manager                         ║
+# ║  Iran (Server) & Kharej (Client) - Peer-to-Peer IPX Tunnel   ║
+# ╚════════════════════════════════════════════════════════════════╝
 
-MIRROR_URL="http://79.175.188.86:8443/spoof-tunnel"
-GITHUB_URL="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/spoof-tunnel-manager/tunnel-core"
-
+# ─── Colors ───────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+WHITE='\033[1;37m'
+DIM='\033[2m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-print_banner() {
+# ─── Paths ────────────────────────────────────────────────────────
+CORE_DIR="/root/spoof-tunnel"
+BINARY_PATH="${CORE_DIR}/spoof-tunnel-core"
+SYSTEMD_DIR="/etc/systemd/system"
+
+# ─── Download Sources ─────────────────────────────────────────────
+MIRROR_URL="http://79.175.188.86:8443/spoof-tunnel"
+GITHUB_URL="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/spoof-tunnel-manager/tunnel-core"
+
+# ─── Helpers ──────────────────────────────────────────────────────
+
+print_line() {
+    echo -e "${CYAN}────────────────────────────────────────────────────${NC}"
+}
+
+print_double_line() {
+    echo -e "${CYAN}════════════════════════════════════════════════════${NC}"
+}
+
+print_header() {
     clear
-    echo -e "${CYAN}"
-    echo "╔══════════════════════════════════════════════╗"
-    echo "║        Spoof Tunnel Core Manager             ║"
-    echo "║        High-Performance L3 IPX Tunnel        ║"
-    echo "╚══════════════════════════════════════════════╝"
+    echo ""
+    echo -e "${CYAN}${BOLD}"
+    echo " ╔════════════════════════════════════════════════╗"
+    echo " ║     SPOOF TUNNEL CORE - Setup & Manager       ║"
+    echo " ╚════════════════════════════════════════════════╝"
     echo -e "${NC}"
+}
+
+msg_info() {
+    echo -e " ${BLUE}[INFO]${NC} $1"
+}
+
+msg_ok() {
+    echo -e " ${GREEN}[OK]${NC} $1"
+}
+
+msg_warn() {
+    echo -e " ${YELLOW}[WARN]${NC} $1"
+}
+
+msg_err() {
+    echo -e " ${RED}[ERR]${NC} $1"
 }
 
 check_root() {
     if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}Error: Run as root${NC}"
+        msg_err "This script must be run as root."
         exit 1
     fi
 }
 
-# Download with mirror fallback
-download_file() {
-    local filename="$1"
-    local output="$2"
-    if curl -sf --connect-timeout 5 --max-time 30 "${MIRROR_URL}/${filename}" -o "$output" 2>/dev/null; then
-        echo -e "${GREEN}  Downloaded from Iran mirror${NC}"
-        return 0
-    fi
-    if curl -sfL --connect-timeout 10 --max-time 60 "${GITHUB_URL}/${filename}" -o "$output" 2>/dev/null; then
-        echo -e "${GREEN}  Downloaded from GitHub${NC}"
-        return 0
-    fi
-    echo -e "${RED}  Download failed from both sources${NC}"
-    return 1
-}
-
-get_status() {
-    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        echo -e "${GREEN}RUNNING${NC}"
-    elif systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
-        echo -e "${YELLOW}STOPPED (enabled)${NC}"
-    elif [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
-        echo -e "${RED}INSTALLED (not enabled)${NC}"
-    else
-        echo -e "${RED}NOT INSTALLED${NC}"
-    fi
-}
-
-# ════════════════════════════════════════
-# 1. Install
-# ════════════════════════════════════════
-do_install() {
-    check_root
-    echo -e "\n${YELLOW}[1/3] Downloading binary...${NC}"
-    if ! download_file "$BINARY_NAME" "/tmp/${BINARY_NAME}"; then
+check_binary() {
+    if [ ! -f "${BINARY_PATH}" ]; then
+        msg_warn "Binary not found at ${BINARY_PATH}"
+        msg_info "Use menu option 12 to download, or place 'spoof-tunnel-core' in ${CORE_DIR}/"
         return 1
     fi
-    chmod +x "/tmp/${BINARY_NAME}"
-    mv "/tmp/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
-    echo -e "${GREEN}  -> ${INSTALL_DIR}/${BINARY_NAME}${NC}"
+    if [ ! -x "${BINARY_PATH}" ]; then
+        chmod +x "${BINARY_PATH}"
+        msg_info "Made binary executable."
+    fi
+    return 0
+}
 
-    echo -e "${YELLOW}[2/3] Creating systemd service...${NC}"
-    mkdir -p "$CONFIG_DIR"
-    cat > "$SERVICE_FILE" <<EOF
+# ─── Download Binary ───────────────────────────────────────────
+
+download_binary() {
+    echo ""
+    echo -e " ${GREEN}${BOLD}>>> Download Spoof Tunnel Core Binary${NC}"
+    print_line
+    echo ""
+    echo -e "  ${WHITE}1)${NC} Download from ${CYAN}Iran Mirror${NC}       ${DIM}(79.175.188.86 — fast for Iran)${NC}"
+    echo -e "  ${WHITE}2)${NC} Download from ${BLUE}GitHub${NC}            ${DIM}(github.com/alireza-2030 — international)${NC}"
+    echo -e "  ${DIM}0)${NC} Cancel"
+    echo ""
+    read -p "  Select mirror: " mirror_choice
+
+    mkdir -p "${CORE_DIR}"
+
+    local url=""
+    case $mirror_choice in
+        1) url="${MIRROR_URL}/spoof-tunnel-core" ;;
+        2) url="${GITHUB_URL}/spoof-tunnel-core" ;;
+        0) return ;;
+        *) msg_err "Invalid option."; return ;;
+    esac
+
+    msg_info "Downloading: ${url}"
+    echo ""
+    if curl -L --max-time 60 --progress-bar -o "${BINARY_PATH}" "${url}"; then
+        local fsize=$(stat -c%s "${BINARY_PATH}" 2>/dev/null || stat -f%z "${BINARY_PATH}" 2>/dev/null)
+        if [ "${fsize:-0}" -gt 500000 ]; then
+            chmod +x "${BINARY_PATH}"
+            msg_ok "Binary installed: ${BINARY_PATH} ($(( fsize / 1024 / 1024 )) MB)"
+        else
+            msg_err "Downloaded file is too small, download may have failed."
+            rm -f "${BINARY_PATH}" 2>/dev/null
+        fi
+    else
+        msg_err "Download failed."
+    fi
+}
+
+# ─── Auto-Detect ──────────────────────────────────────────────────
+
+detect_interface() {
+    local iface=""
+    iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
+    if [ -z "$iface" ]; then
+        iface=$(ip -o link show up 2>/dev/null | awk -F': ' '{print $2}' | grep -v '^lo$' | head -1)
+    fi
+    echo "${iface:-eth0}"
+}
+
+detect_public_ip() {
+    local iface
+    iface=$(detect_interface)
+    local ip=""
+    if [ -n "$iface" ]; then
+        ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+    fi
+    if [ -z "$ip" ]; then
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+    echo "$ip"
+}
+
+# ─── Input Helper ─────────────────────────────────────────────────
+
+read_input() {
+    local prompt="$1"
+    local default="$2"
+    local var_name="$3"
+
+    if [ -n "$default" ]; then
+        read -p "  ${prompt} [${default}]: " input_val
+        eval "${var_name}=\"${input_val:-$default}\""
+    else
+        read -p "  ${prompt}: " input_val
+        eval "${var_name}=\"${input_val}\""
+    fi
+}
+
+# ─── Review Box ───────────────────────────────────────────────────
+
+show_review_box() {
+    local mode="$1"
+
+    echo ""
+    print_double_line
+    echo -e " ${WHITE}${BOLD}  REVIEW YOUR SETTINGS${NC}"
+    print_double_line
+    echo ""
+    echo -e "  ${MAGENTA}Tunnel ID:${NC}       ${WHITE}${BOLD}${TUNNEL_ID}${NC}"
+    echo -e "  ${MAGENTA}Tunnel Name:${NC}     ${WHITE}${BOLD}${TUN_NAME}${NC}"
+    echo -e "  ${MAGENTA}Tunnel Port:${NC}     ${WHITE}${BOLD}${TUNNEL_PORT}${NC}"
+    echo ""
+    print_line
+    echo -e "  ${CYAN}TUN Network:${NC}"
+    if [ "$mode" = "iran" ]; then
+        echo -e "    Local  (Iran):   ${GREEN}${BOLD}10.10.${TUNNEL_ID}.1/24${NC}"
+        echo -e "    Remote (Kharej): ${BLUE}${BOLD}10.10.${TUNNEL_ID}.2/24${NC}"
+    else
+        echo -e "    Local  (Kharej): ${GREEN}${BOLD}10.10.${TUNNEL_ID}.2/24${NC}"
+        echo -e "    Remote (Iran):   ${BLUE}${BOLD}10.10.${TUNNEL_ID}.1/24${NC}"
+    fi
+    echo -e "    MTU:             ${WHITE}${MTU}${NC}"
+    echo ""
+    print_line
+    echo -e "  ${CYAN}IPX Spoof Network:${NC}"
+    echo -e "    Listen IP:       ${GREEN}${BOLD}${LISTEN_IP}${NC}"
+    echo -e "    Dest IP:         ${BLUE}${BOLD}${DST_IP}${NC}"
+    echo -e "    Spoof Src IP:    ${MAGENTA}${BOLD}${SPOOF_SRC_IP}${NC}"
+    echo -e "    Spoof Dst IP:    ${MAGENTA}${BOLD}${SPOOF_DST_IP}${NC}"
+    echo -e "    Interface:       ${WHITE}${BOLD}${INTERFACE}${NC}  ${DIM}(auto-detected)${NC}"
+    echo ""
+    print_line
+    echo -e "  ${CYAN}Transport:${NC}"
+    echo -e "    Heartbeat:       ${WHITE}${HEARTBEAT_INTERVAL}s interval / ${HEARTBEAT_TIMEOUT}s timeout${NC}"
+    echo -e "    Workers:         ${WHITE}${WORKERS} (0=auto)${NC}"
+    echo -e "    Channel Size:    ${WHITE}${CHANNEL_SIZE}${NC}"
+    echo ""
+    print_double_line
+    echo ""
+}
+
+# ─── Config Generator ────────────────────────────────────────────
+
+generate_config() {
+    local config_file="$1"
+    local mode="$2"
+
+    cat > "${config_file}" << EOF
+[transport]
+type = "tun"
+heartbeat_interval = ${HEARTBEAT_INTERVAL}
+heartbeat_timeout = ${HEARTBEAT_TIMEOUT}
+
+[tun]
+encapsulation = "ipx"
+name = "${TUN_NAME}"
+local_addr = "${LOCAL_TUN_ADDR}"
+remote_addr = "${REMOTE_TUN_ADDR}"
+health_port = ${TUNNEL_PORT}
+mtu = ${MTU}
+
+[ipx]
+mode = "${mode}"
+profile = "udp"
+listen_ip = "${LISTEN_IP}"
+dst_ip = "${DST_IP}"
+spoof_src_ip = "${SPOOF_SRC_IP}"
+spoof_dst_ip = "${SPOOF_DST_IP}"
+interface = "${INTERFACE}"
+
+[security]
+enable_encryption = false
+
+[tuning]
+auto_tuning = true
+tuning_profile = "balanced"
+workers = ${WORKERS}
+channel_size = ${CHANNEL_SIZE}
+so_sndbuf = 0
+batch_size = 2048
+
+[logging]
+log_level = "info"
+EOF
+}
+
+create_systemd_service() {
+    local service_name="$1"
+    local config_file="$2"
+    local description="$3"
+    local service_path="${SYSTEMD_DIR}/${service_name}.service"
+
+    cat > "${service_path}" << EOF
 [Unit]
-Description=Spoof Tunnel Core - High Performance L3 Tunnel
+Description=${description}
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE}
+ExecStart=${BINARY_PATH} --config ${config_file}
 Restart=always
 RestartSec=3
 LimitNOFILE=65535
@@ -105,254 +279,433 @@ PrivateTmp=yes
 [Install]
 WantedBy=multi-user.target
 EOF
+
     systemctl daemon-reload
-    systemctl enable "$SERVICE_NAME" >/dev/null 2>&1
-    echo -e "${GREEN}  -> Service created & enabled${NC}"
-
-    echo -e "${YELLOW}[3/3] Config setup...${NC}"
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${YELLOW}  No config found. Let's configure now.${NC}"
-        do_configure
-    else
-        echo -e "${GREEN}  -> Config exists at ${CONFIG_FILE}${NC}"
-    fi
-
-    echo -e "\n${GREEN}Installation complete! Use option 3 to start.${NC}"
+    systemctl enable "${service_name}" &>/dev/null
+    systemctl start "${service_name}"
 }
 
-# ════════════════════════════════════════
-# 2. Configure (Interactive)
-# ════════════════════════════════════════
-do_configure() {
-    check_root
-    echo -e "\n${CYAN}── Tunnel Configuration ──${NC}\n"
+# ─── Setup Functions ─────────────────────────────────────────────
 
-    # Role
-    echo -e "${BOLD}Select role:${NC}"
-    echo "  1) Server (Foreign/Kharej)"
-    echo "  2) Client (Iran)"
-    read -rp "Choice [1/2]: " role_choice
-    if [ "$role_choice" = "1" ]; then
-        MODE="server"
-    else
-        MODE="client"
-    fi
-
-    # TUN
-    read -rp "TUN interface name [spoof0]: " TUN_NAME
-    TUN_NAME="${TUN_NAME:-spoof0}"
-
-    read -rp "TUN local IP/mask [10.10.12.1/24]: " LOCAL_ADDR
-    LOCAL_ADDR="${LOCAL_ADDR:-10.10.12.1/24}"
-
-    read -rp "TUN remote IP/mask [10.10.12.2/24]: " REMOTE_ADDR
-    REMOTE_ADDR="${REMOTE_ADDR:-10.10.12.2/24}"
-
-    read -rp "Tunnel port [2222]: " TUNNEL_PORT
-    TUNNEL_PORT="${TUNNEL_PORT:-2222}"
-
-    read -rp "MTU [1320]: " MTU
-    MTU="${MTU:-1320}"
-
-    # IPX
+setup_iran() {
+    print_header
+    echo -e " ${GREEN}${BOLD}>>> Setup Iran Server (Peer — Server Mode)${NC}"
     echo ""
-    echo -e "${CYAN}── IPX Spoof Settings ──${NC}"
-    read -rp "This server's public IP (listen_ip): " LISTEN_IP
-    read -rp "Remote server's public IP (dst_ip): " DST_IP
-    read -rp "Spoofed source IP (spoof_src_ip): " SPOOF_SRC
-    read -rp "Expected incoming source IP (spoof_dst_ip): " SPOOF_DST
-    read -rp "Network interface [eth0]: " NET_IFACE
-    NET_IFACE="${NET_IFACE:-eth0}"
+    print_line
 
-    # Heartbeat
-    echo ""
-    read -rp "Heartbeat interval (sec) [10]: " HB_INTERVAL
-    HB_INTERVAL="${HB_INTERVAL:-10}"
-    read -rp "Heartbeat timeout (sec) [25]: " HB_TIMEOUT
-    HB_TIMEOUT="${HB_TIMEOUT:-25}"
+    INTERFACE=$(detect_interface)
+    local AUTO_IP
+    AUTO_IP=$(detect_public_ip)
 
-    # Workers
-    read -rp "Workers (0=auto): " WORKERS
-    WORKERS="${WORKERS:-0}"
-    read -rp "Channel size [10000]: " CH_SIZE
-    CH_SIZE="${CH_SIZE:-10000}"
-
-    # Write config
-    mkdir -p "$CONFIG_DIR"
-    cat > "$CONFIG_FILE" <<EOF
-[transport]
-type = "tun"
-heartbeat_interval = ${HB_INTERVAL}
-heartbeat_timeout = ${HB_TIMEOUT}
-
-[tun]
-encapsulation = "ipx"
-name = "${TUN_NAME}"
-local_addr = "${LOCAL_ADDR}"
-remote_addr = "${REMOTE_ADDR}"
-health_port = ${TUNNEL_PORT}
-mtu = ${MTU}
-
-[ipx]
-mode = "${MODE}"
-profile = "udp"
-listen_ip = "${LISTEN_IP}"
-dst_ip = "${DST_IP}"
-spoof_src_ip = "${SPOOF_SRC}"
-spoof_dst_ip = "${SPOOF_DST}"
-interface = "${NET_IFACE}"
-
-[security]
-enable_encryption = false
-
-[tuning]
-auto_tuning = true
-tuning_profile = "balanced"
-workers = ${WORKERS}
-channel_size = ${CH_SIZE}
-so_sndbuf = 0
-batch_size = 2048
-
-[logging]
-log_level = "info"
-EOF
-
-    echo -e "\n${GREEN}Config saved to ${CONFIG_FILE}${NC}"
-    echo -e "${YELLOW}Review:${NC}"
-    echo "  Mode:       ${MODE}"
-    echo "  TUN:        ${TUN_NAME} (${LOCAL_ADDR} <-> ${REMOTE_ADDR})"
-    echo "  Listen:     ${LISTEN_IP}:${TUNNEL_PORT}"
-    echo "  Dest:       ${DST_IP}:${TUNNEL_PORT}"
-    echo "  Spoof Src:  ${SPOOF_SRC}"
-    echo "  Spoof Dst:  ${SPOOF_DST}"
-}
-
-# ════════════════════════════════════════
-# Service controls
-# ════════════════════════════════════════
-do_start() {
-    check_root
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${RED}No config found! Run Configure first.${NC}"
-        return 1
+    # ── Step 1: Tunnel Identity ──
+    echo -e "\n ${MAGENTA}${BOLD}[1/4] Tunnel Identity${NC}"
+    read_input "Tunnel ID (e.g. 10, 12, 50)" "" TUNNEL_ID
+    if [ -z "$TUNNEL_ID" ]; then
+        msg_err "Tunnel ID is required!"
+        return
     fi
-    systemctl start "$SERVICE_NAME"
-    sleep 1
-    systemctl status "$SERVICE_NAME" --no-pager -l | head -15
-}
+    read_input "Tunnel name" "spoof${TUNNEL_ID}" TUN_NAME
+    read_input "Tunnel port" "2222" TUNNEL_PORT
+    read_input "MTU" "1320" MTU
 
-do_stop() {
-    check_root
-    systemctl stop "$SERVICE_NAME"
-    echo -e "${YELLOW}Service stopped${NC}"
-}
+    LOCAL_TUN_ADDR="10.10.${TUNNEL_ID}.1/24"
+    REMOTE_TUN_ADDR="10.10.${TUNNEL_ID}.2/24"
 
-do_restart() {
-    check_root
-    systemctl restart "$SERVICE_NAME"
-    sleep 1
-    systemctl status "$SERVICE_NAME" --no-pager -l | head -15
-}
-
-do_status() {
-    echo -e "\n${CYAN}── Service Status ──${NC}"
-    systemctl status "$SERVICE_NAME" --no-pager -l 2>/dev/null || echo -e "${RED}Service not found${NC}"
-    if [ -f "$CONFIG_FILE" ]; then
-        echo -e "\n${CYAN}── Current Config ──${NC}"
-        grep -E "^(mode|listen_ip|dst_ip|spoof_src|spoof_dst|health_port|mtu|workers)" "$CONFIG_FILE" 2>/dev/null || cat "$CONFIG_FILE"
+    # ── Step 2: IPX Network ──
+    echo -e "\n ${MAGENTA}${BOLD}[2/4] IPX Spoof Network${NC}"
+    msg_info "Interface auto-detected: ${BOLD}${INTERFACE}${NC}"
+    read_input "Change interface? (Enter to keep)" "${INTERFACE}" INTERFACE
+    if [ -n "$AUTO_IP" ]; then
+        msg_info "Public IP auto-detected: ${BOLD}${AUTO_IP}${NC}"
     fi
-}
-
-do_logs() {
-    journalctl -u "$SERVICE_NAME" -f --no-pager -n 50
-}
-
-do_edit_config() {
-    if [ -f "$CONFIG_FILE" ]; then
-        ${EDITOR:-nano} "$CONFIG_FILE"
-        echo -e "${YELLOW}Restart service to apply changes: systemctl restart ${SERVICE_NAME}${NC}"
-    else
-        echo -e "${RED}No config file found. Run Configure first.${NC}"
+    read_input "Listen IP (this server's public IP)" "${AUTO_IP}" LISTEN_IP
+    if [ -z "$LISTEN_IP" ]; then
+        msg_err "Listen IP is required!"
+        return
     fi
-}
-
-do_uninstall() {
-    check_root
-    echo -e "${RED}This will remove Spoof Tunnel completely.${NC}"
-    read -rp "Are you sure? (y/N): " confirm
-    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-        echo "Cancelled."
+    read_input "Destination IP (Kharej public IP)" "" DST_IP
+    if [ -z "$DST_IP" ]; then
+        msg_err "Destination IP is required!"
+        return
+    fi
+    read_input "Spoof Source IP" "" SPOOF_SRC_IP
+    if [ -z "$SPOOF_SRC_IP" ]; then
+        msg_err "Spoof Source IP is required!"
+        return
+    fi
+    read_input "Spoof Destination IP" "" SPOOF_DST_IP
+    if [ -z "$SPOOF_DST_IP" ]; then
+        msg_err "Spoof Destination IP is required!"
         return
     fi
 
-    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-    rm -f "$SERVICE_FILE"
-    systemctl daemon-reload
-    rm -f "${INSTALL_DIR}/${BINARY_NAME}"
+    # ── Step 3: Transport ──
+    echo -e "\n ${MAGENTA}${BOLD}[3/4] Transport & Tuning${NC}"
+    read_input "Heartbeat interval (sec)" "10" HEARTBEAT_INTERVAL
+    read_input "Heartbeat timeout (sec)" "25" HEARTBEAT_TIMEOUT
+    read_input "Workers (0=auto)" "0" WORKERS
+    read_input "Channel size" "10000" CHANNEL_SIZE
 
-    echo -e "${RED}Binary and service removed.${NC}"
-    read -rp "Remove config too? (y/N): " rm_config
-    if [ "$rm_config" = "y" ] || [ "$rm_config" = "Y" ]; then
-        rm -rf "$CONFIG_DIR"
-        echo -e "${RED}Config removed.${NC}"
+    # ── Step 4: Review ──
+    show_review_box "iran"
+
+    read -p "  Proceed with setup? (Y/n): " confirm
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+        msg_warn "Setup cancelled."
+        return
+    fi
+
+    # ── Generate ──
+    echo ""
+    mkdir -p "${CORE_DIR}"
+
+    local config_file="${CORE_DIR}/iran${TUNNEL_PORT}.toml"
+    local service_name="spoof-iran${TUNNEL_PORT}"
+
+    generate_config "${config_file}" "server"
+    msg_ok "Config saved: ${config_file}"
+
+    if ! check_binary; then
+        msg_warn "Binary not found. Download it first (option 12)."
+        msg_ok "Config saved but service NOT started."
+        return
+    fi
+
+    create_systemd_service "${service_name}" "${config_file}" "Spoof Tunnel Iran - ${TUN_NAME}"
+    msg_ok "Service created and started: ${service_name}"
+
+    echo ""
+    print_double_line
+    echo -e " ${GREEN}${BOLD}  Iran Server Setup Complete!${NC}"
+    print_double_line
+    echo ""
+    echo -e "  Config:    ${BLUE}${config_file}${NC}"
+    echo -e "  Service:   ${BLUE}${service_name}.service${NC}"
+    echo ""
+    echo -e " ${YELLOW}${BOLD}  For Kharej setup, use:${NC}"
+    echo -e "    Tunnel ID:     ${CYAN}${BOLD}${TUNNEL_ID}${NC}"
+    echo -e "    Dest IP:       ${CYAN}${BOLD}${LISTEN_IP}${NC}"
+    echo -e "    Spoof Src IP:  ${CYAN}${BOLD}${SPOOF_DST_IP}${NC}  ${DIM}(swap src<->dst on Kharej)${NC}"
+    echo -e "    Spoof Dst IP:  ${CYAN}${BOLD}${SPOOF_SRC_IP}${NC}  ${DIM}(swap src<->dst on Kharej)${NC}"
+    echo ""
+
+    echo -e " ${CYAN}Service status:${NC}"
+    systemctl status "${service_name}" --no-pager -l 2>/dev/null | head -5
+    echo ""
+}
+
+setup_kharej() {
+    print_header
+    echo -e " ${GREEN}${BOLD}>>> Setup Kharej Client (Peer — Client Mode)${NC}"
+    echo ""
+    print_line
+
+    INTERFACE=$(detect_interface)
+    local AUTO_IP
+    AUTO_IP=$(detect_public_ip)
+
+    # ── Step 1: Tunnel Identity ──
+    echo -e "\n ${MAGENTA}${BOLD}[1/4] Tunnel Identity${NC}"
+    read_input "Tunnel ID (must match Iran, e.g. 10, 12, 50)" "" TUNNEL_ID
+    if [ -z "$TUNNEL_ID" ]; then
+        msg_err "Tunnel ID is required!"
+        return
+    fi
+    read_input "Tunnel name" "spoof${TUNNEL_ID}" TUN_NAME
+    read_input "Tunnel port" "2222" TUNNEL_PORT
+    read_input "MTU" "1320" MTU
+
+    LOCAL_TUN_ADDR="10.10.${TUNNEL_ID}.2/24"
+    REMOTE_TUN_ADDR="10.10.${TUNNEL_ID}.1/24"
+
+    # ── Step 2: IPX Network ──
+    echo -e "\n ${MAGENTA}${BOLD}[2/4] IPX Spoof Network${NC}"
+    msg_info "Interface auto-detected: ${BOLD}${INTERFACE}${NC}"
+    read_input "Change interface? (Enter to keep)" "${INTERFACE}" INTERFACE
+    if [ -n "$AUTO_IP" ]; then
+        msg_info "Public IP auto-detected: ${BOLD}${AUTO_IP}${NC}"
+    fi
+    read_input "Listen IP (this server's public IP)" "${AUTO_IP}" LISTEN_IP
+    if [ -z "$LISTEN_IP" ]; then
+        msg_err "Listen IP is required!"
+        return
+    fi
+    read_input "Destination IP (Iran public IP)" "" DST_IP
+    if [ -z "$DST_IP" ]; then
+        msg_err "Destination IP is required!"
+        return
+    fi
+    msg_info "Note: In Kharej, spoof src/dst are SWAPPED vs Iran side."
+    read_input "Spoof Source IP (= Iran's spoof_dst_ip)" "" SPOOF_SRC_IP
+    if [ -z "$SPOOF_SRC_IP" ]; then
+        msg_err "Spoof Source IP is required!"
+        return
+    fi
+    read_input "Spoof Destination IP (= Iran's spoof_src_ip)" "" SPOOF_DST_IP
+    if [ -z "$SPOOF_DST_IP" ]; then
+        msg_err "Spoof Destination IP is required!"
+        return
+    fi
+
+    # ── Step 3: Transport ──
+    echo -e "\n ${MAGENTA}${BOLD}[3/4] Transport & Tuning${NC}"
+    read_input "Heartbeat interval (sec)" "10" HEARTBEAT_INTERVAL
+    read_input "Heartbeat timeout (sec)" "25" HEARTBEAT_TIMEOUT
+    read_input "Workers (0=auto)" "0" WORKERS
+    read_input "Channel size" "10000" CHANNEL_SIZE
+
+    # ── Step 4: Review ──
+    show_review_box "kharej"
+
+    read -p "  Proceed with setup? (Y/n): " confirm
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+        msg_warn "Setup cancelled."
+        return
+    fi
+
+    # ── Generate ──
+    echo ""
+    mkdir -p "${CORE_DIR}"
+
+    local config_file="${CORE_DIR}/kharej${TUNNEL_PORT}.toml"
+    local service_name="spoof-kharej${TUNNEL_PORT}"
+
+    generate_config "${config_file}" "client"
+    msg_ok "Config saved: ${config_file}"
+
+    if ! check_binary; then
+        msg_warn "Binary not found. Download it first (option 12)."
+        msg_ok "Config saved but service NOT started."
+        return
+    fi
+
+    create_systemd_service "${service_name}" "${config_file}" "Spoof Tunnel Kharej - ${TUN_NAME}"
+    msg_ok "Service created and started: ${service_name}"
+
+    echo ""
+    print_double_line
+    echo -e " ${GREEN}${BOLD}  Kharej Client Setup Complete!${NC}"
+    print_double_line
+    echo ""
+    echo -e "  Config:    ${BLUE}${config_file}${NC}"
+    echo -e "  Service:   ${BLUE}${service_name}.service${NC}"
+    echo ""
+
+    echo -e " ${CYAN}Service status:${NC}"
+    systemctl status "${service_name}" --no-pager -l 2>/dev/null | head -5
+    echo ""
+}
+
+# ─── Management ───────────────────────────────────────────────────
+
+list_tunnels() {
+    echo ""
+    echo -e " ${CYAN}${BOLD}Active Spoof Tunnels:${NC}"
+    print_line
+
+    local found=0
+    local i=1
+    TUNNEL_LIST=()
+
+    for svc in $(systemctl list-units --type=service --all --no-legend | grep "spoof-" | awk '{print $1}'); do
+        found=1
+        local name="${svc%.service}"
+        local status=$(systemctl is-active "${name}" 2>/dev/null)
+        TUNNEL_LIST+=("${name}")
+
+        if [ "$status" = "active" ]; then
+            echo -e "  ${GREEN}●${NC} ${BOLD}${i})${NC} ${name}  ${GREEN}[active]${NC}"
+        else
+            echo -e "  ${RED}●${NC} ${BOLD}${i})${NC} ${name}  ${RED}[${status}]${NC}"
+        fi
+        ((i++))
+    done
+
+    if [ $found -eq 0 ]; then
+        msg_warn "No spoof tunnels found."
+        return 1
+    fi
+    echo ""
+    return 0
+}
+
+pick_tunnel() {
+    list_tunnels || return 1
+
+    read -p "  Enter number or service name: " pick
+
+    if [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "${#TUNNEL_LIST[@]}" ]; then
+        SELECTED_TUNNEL="${TUNNEL_LIST[$((pick-1))]}"
     else
-        echo -e "${YELLOW}Config kept at ${CONFIG_DIR}/${NC}"
+        SELECTED_TUNNEL="$pick"
+    fi
+
+    if ! systemctl list-units --type=service --all --no-legend | grep -q "${SELECTED_TUNNEL}"; then
+        msg_err "Service '${SELECTED_TUNNEL}' not found."
+        return 1
+    fi
+
+    return 0
+}
+
+do_restart() {
+    pick_tunnel || return
+    systemctl restart "${SELECTED_TUNNEL}"
+    msg_ok "${SELECTED_TUNNEL} restarted."
+    systemctl status "${SELECTED_TUNNEL}" --no-pager -l 2>/dev/null | head -5
+}
+
+do_stop() {
+    pick_tunnel || return
+    systemctl stop "${SELECTED_TUNNEL}"
+    msg_ok "${SELECTED_TUNNEL} stopped."
+}
+
+do_start() {
+    pick_tunnel || return
+    systemctl start "${SELECTED_TUNNEL}"
+    systemctl enable "${SELECTED_TUNNEL}" &>/dev/null
+    msg_ok "${SELECTED_TUNNEL} started & enabled."
+    systemctl status "${SELECTED_TUNNEL}" --no-pager -l 2>/dev/null | head -5
+}
+
+do_disable() {
+    pick_tunnel || return
+    systemctl stop "${SELECTED_TUNNEL}" 2>/dev/null
+    systemctl disable "${SELECTED_TUNNEL}" 2>/dev/null
+    msg_ok "${SELECTED_TUNNEL} stopped & disabled. Config files kept."
+}
+
+do_logs() {
+    pick_tunnel || return
+    echo ""
+    journalctl -u "${SELECTED_TUNNEL}" -n 50 --no-pager
+}
+
+do_live_logs() {
+    pick_tunnel || return
+    msg_info "Live logs for ${SELECTED_TUNNEL} (Ctrl+C to exit):"
+    journalctl -u "${SELECTED_TUNNEL}" -f
+}
+
+do_view_config() {
+    pick_tunnel || return
+
+    local cfg="${CORE_DIR}/${SELECTED_TUNNEL#spoof-}.toml"
+
+    if [ -f "$cfg" ]; then
+        echo ""
+        print_line
+        cat "$cfg"
+        print_line
+    else
+        msg_err "Config file not found at ${cfg}."
     fi
 }
 
-# ════════════════════════════════════════
-# Main Menu
-# ════════════════════════════════════════
-show_menu() {
-    print_banner
-    echo -e "  Status: $(get_status)"
-    echo ""
-    echo -e "  ${BOLD}1)${NC} Install"
-    echo -e "  ${BOLD}2)${NC} Configure Tunnel"
-    echo -e "  ${BOLD}3)${NC} Start"
-    echo -e "  ${BOLD}4)${NC} Stop"
-    echo -e "  ${BOLD}5)${NC} Restart"
-    echo -e "  ${BOLD}6)${NC} Status & Info"
-    echo -e "  ${BOLD}7)${NC} View Logs"
-    echo -e "  ${BOLD}8)${NC} Edit Config File"
-    echo -e "  ${BOLD}9)${NC} Uninstall"
-    echo -e "  ${BOLD}0)${NC} Exit"
-    echo ""
-    read -rp "  Select option: " choice
+do_edit_config() {
+    pick_tunnel || return
+
+    local cfg="${CORE_DIR}/${SELECTED_TUNNEL#spoof-}.toml"
+
+    if [ -f "$cfg" ]; then
+        ${EDITOR:-nano} "$cfg"
+        echo ""
+        msg_warn "Restart the tunnel to apply changes."
+        read -p "  Restart now? (Y/n): " restart_confirm
+        if [[ ! "$restart_confirm" =~ ^[Nn]$ ]]; then
+            systemctl restart "${SELECTED_TUNNEL}"
+            msg_ok "${SELECTED_TUNNEL} restarted."
+        fi
+    else
+        msg_err "Config file not found at ${cfg}."
+    fi
 }
 
-# Direct command mode
-if [ -n "$1" ]; then
-    case "$1" in
-        install)    do_install ;;
-        configure)  do_configure ;;
-        start)      do_start ;;
-        stop)       do_stop ;;
-        restart)    do_restart ;;
-        status)     do_status ;;
-        logs)       do_logs ;;
-        edit)       do_edit_config ;;
-        uninstall)  do_uninstall ;;
-        *)          echo "Usage: $0 {install|configure|start|stop|restart|status|logs|edit|uninstall}" ;;
-    esac
-    exit 0
-fi
+do_delete() {
+    pick_tunnel || return
+    echo ""
+    echo -e " ${RED}${BOLD}This will permanently delete ${SELECTED_TUNNEL} and its config.${NC}"
+    read -p "  Type 'DELETE' to confirm: " confirm
+    if [ "$confirm" = "DELETE" ]; then
+        systemctl stop "${SELECTED_TUNNEL}" 2>/dev/null
+        systemctl disable "${SELECTED_TUNNEL}" 2>/dev/null
 
-# Interactive menu loop
-while true; do
-    show_menu
-    case "$choice" in
-        1) do_install; read -rp "Press Enter..." ;;
-        2) do_configure; read -rp "Press Enter..." ;;
-        3) do_start; read -rp "Press Enter..." ;;
-        4) do_stop; read -rp "Press Enter..." ;;
-        5) do_restart; read -rp "Press Enter..." ;;
-        6) do_status; read -rp "Press Enter..." ;;
-        7) do_logs ;;
-        8) do_edit_config; read -rp "Press Enter..." ;;
-        9) do_uninstall; read -rp "Press Enter..." ;;
-        0) echo -e "${GREEN}Bye!${NC}"; exit 0 ;;
-        *) echo -e "${RED}Invalid option${NC}"; sleep 1 ;;
-    esac
-done
+        local cfg="${CORE_DIR}/${SELECTED_TUNNEL#spoof-}.toml"
+
+        rm -f "${SYSTEMD_DIR}/${SELECTED_TUNNEL}.service"
+        if [ -f "$cfg" ]; then
+            rm -f "$cfg"
+            msg_ok "${SELECTED_TUNNEL} and config (${cfg}) deleted."
+        else
+            msg_ok "${SELECTED_TUNNEL} deleted. (Config already removed)"
+        fi
+
+        systemctl daemon-reload
+    else
+        msg_warn "Cancelled."
+    fi
+}
+
+# ─── Main Menu ────────────────────────────────────────────────────
+
+main_menu() {
+    while true; do
+        print_header
+        echo -e " ${BOLD}${WHITE}Setup${NC}"
+        echo -e "  ${GREEN}1)${NC} Setup Iran Server"
+        echo -e "  ${BLUE}2)${NC} Setup Kharej Client"
+        echo ""
+        echo -e " ${BOLD}${WHITE}Tunnels${NC}"
+        echo -e "  ${CYAN}3)${NC} List All Tunnels"
+        echo -e "  ${GREEN}4)${NC} Start a Tunnel"
+        echo -e "  ${YELLOW}5)${NC} Restart a Tunnel"
+        echo -e "  ${YELLOW}6)${NC} Stop a Tunnel"
+        echo -e "  ${MAGENTA}7)${NC} Stop & Disable (keep files)"
+        echo ""
+        echo -e " ${BOLD}${WHITE}Info & Logs${NC}"
+        echo -e "  ${CYAN}8)${NC} View Last 50 Logs"
+        echo -e "  ${CYAN}9)${NC} View Live Logs"
+        echo -e "  ${BLUE}10)${NC} View Config"
+        echo -e "  ${BLUE}11)${NC} Edit Config"
+        echo ""
+        echo -e " ${BOLD}${WHITE}Install & Danger${NC}"
+        echo -e "  ${MAGENTA}12)${NC} Download Binary"
+        echo -e "  ${RED}13)${NC} Delete a Tunnel"
+        echo ""
+        echo -e "  ${DIM}0)${NC} Exit"
+        echo ""
+        read -p "  Select: " choice
+
+        case $choice in
+            1)  setup_iran ;;
+            2)  setup_kharej ;;
+            3)  list_tunnels ;;
+            4)  do_start ;;
+            5)  do_restart ;;
+            6)  do_stop ;;
+            7)  do_disable ;;
+            8)  do_logs ;;
+            9)  do_live_logs ;;
+            10) do_view_config ;;
+            11) do_edit_config ;;
+            12) download_binary ;;
+            13) do_delete ;;
+            0)
+                echo -e "\n ${GREEN}Goodbye!${NC}\n"
+                exit 0
+                ;;
+            *)
+                msg_err "Invalid option."
+                ;;
+        esac
+
+        echo ""
+        read -p "  Press Enter to continue..."
+    done
+}
+
+# ─── Entry Point ──────────────────────────────────────────────────
+
+check_root
+main_menu

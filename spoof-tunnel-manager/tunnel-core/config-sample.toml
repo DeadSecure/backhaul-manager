@@ -1,0 +1,43 @@
+# ──────────────────────────────────────────────────────
+# Spoof Tunnel Core — Sample Configuration (Iran Side)
+# Copy to /etc/spoof-tunnel/config.toml and edit values
+# ──────────────────────────────────────────────────────
+
+[transport]
+type = "tun"
+heartbeat_interval = 10
+heartbeat_timeout = 25
+
+[tun]
+encapsulation = "ipx"
+name = "spoof0"
+local_addr = "10.10.12.2/24"
+remote_addr = "10.10.12.1/24"
+health_port = 2222
+mtu = 1320
+
+[ipx]
+mode = "client"                    # "server" for foreign, "client" for iran
+profile = "udp"
+listen_ip = "YOUR_LOCAL_IP"        # Your server's real public IP
+dst_ip = "REMOTE_SERVER_IP"        # Remote server's real public IP
+spoof_src_ip = "SPOOF_SOURCE_IP"   # Spoofed source IP
+spoof_dst_ip = "SPOOF_DEST_IP"     # Expected source IP of incoming packets
+interface = "eth0"
+
+[security]
+enable_encryption = false
+algorithm = "aes-256-gcm"
+psk = ""
+kdf_iterations = 100000
+
+[tuning]
+auto_tuning = true
+tuning_profile = "balanced"
+workers = 0                        # 0 = auto (CPU cores)
+channel_size = 10000               # Per-direction packet buffer
+so_sndbuf = 0                      # 0 = auto (4 MiB)
+batch_size = 2048                  # Reserved for future use
+
+[logging]
+log_level = "info"

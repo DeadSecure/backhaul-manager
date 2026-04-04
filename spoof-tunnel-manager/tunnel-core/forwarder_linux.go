@@ -43,12 +43,18 @@ func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSr
 	}
 
 	// Per-worker channels with generous sizing to reduce drops under burst
+	// Channel size tuning: SMALLER = LOWER LATENCY (less bufferbloat)
+	// 256 packets * ~1400 bytes = ~350KB per worker = ~28ms at 100Mbps
+	// Too large → packets queue for 100ms+ → latency spikes under load
 	if channelSize <= 0 {
-		channelSize = 16384
+		channelSize = 512
 	}
 	chSize := channelSize / workers
-	if chSize < 1024 {
-		chSize = 1024
+	if chSize < 128 {
+		chSize = 128
+	}
+	if chSize > 256 {
+		chSize = 256
 	}
 
 	// Track raw FDs for cleanup

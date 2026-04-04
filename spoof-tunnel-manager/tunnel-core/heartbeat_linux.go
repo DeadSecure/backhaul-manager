@@ -27,13 +27,14 @@ func StartHeartbeat(dstIPStr string, dstPort int, spoofSrcStr string, srcPort in
 	ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
 	defer ticker.Stop()
 
-	// Initialize lastPongTime to now (assume alive at start)
-	atomic.StoreInt64(&lastPongTime, time.Now().Unix())
+	// Initialize lastPongTime to 0 — we haven't received any pong yet
+	atomic.StoreInt64(&lastPongTime, 0)
 
 	timeoutDuration := int64(timeoutSec)
-	peerAlive := true
+	peerAlive := false
+	firstConnect := true
 
-	log.Printf("Heartbeat: every %ds, timeout %ds -> %s:%d", intervalSec, timeoutSec, dstIPStr, dstPort)
+	log.Printf("Heartbeat: every %ds, timeout %ds -> %s:%d (waiting for connection...)", intervalSec, timeoutSec, dstIPStr, dstPort)
 
 	// Pre-allocate context and payload — zero allocation per tick
 	hbCtx := NewSpoofContext(srcIP, dstIP, srcPort, dstPort, 64, dstAddr, fd)
@@ -45,16 +46,31 @@ func StartHeartbeat(dstIPStr string, dstPort int, spoofSrcStr string, srcPort in
 
 		// Check if we received a pong recently
 		lastPong := atomic.LoadInt64(&lastPongTime)
+
+		// No pong ever received
+		if lastPong == 0 {
+			if !firstConnect {
+				continue
+			}
+			// Still waiting for first connection
+			continue
+		}
+
 		elapsed := time.Now().Unix() - lastPong
 
 		if elapsed > timeoutDuration {
 			if peerAlive {
-				log.Printf("Heartbeat TIMEOUT: no pong from %s for %ds", dstIPStr, elapsed)
+				log.Printf("!! TUNNEL DISCONNECTED !! No pong from %s for %ds", dstIPStr, elapsed)
 				peerAlive = false
 			}
 		} else {
 			if !peerAlive {
-				log.Printf("Heartbeat RECOVERED: peer %s is alive again", dstIPStr)
+				if firstConnect {
+					log.Printf("** TUNNEL CONNECTED ** peer %s is reachable (rtt OK)", dstIPStr)
+					firstConnect = false
+				} else {
+					log.Printf("** TUNNEL RECONNECTED ** peer %s is alive again", dstIPStr)
+				}
 			}
 			peerAlive = true
 		}

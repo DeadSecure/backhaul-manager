@@ -29,10 +29,13 @@ func StartHeartbeat(dstIPStr string, dstPort int, spoofSrcStr string, srcPort in
 
 	log.Printf("Heartbeat: every %ds, timeout %ds -> %s:%d", intervalSec, timeoutSec, dstIPStr, dstPort)
 
+	// Pre-allocate context and payload — zero allocation per tick
+	hbCtx := NewSpoofContext(srcIP, dstIP, srcPort, dstPort, 64, dstAddr)
+	pingPayload := []byte{PktTypeHeartbeat}
+
 	for range ticker.C {
-		// Send heartbeat ping: [PktTypeHeartbeat]
-		pingPayload := []byte{PktTypeHeartbeat}
-		_ = SendSpoofedUDP(srcIP, dstIP, srcPort, dstPort, pingPayload, dstAddr)
+		// Send heartbeat ping — zero allocation
+		_ = hbCtx.buildAndSend(pingPayload)
 
 		// Check if we received a pong recently
 		lastPong := atomic.LoadInt64(&lastPongTime)

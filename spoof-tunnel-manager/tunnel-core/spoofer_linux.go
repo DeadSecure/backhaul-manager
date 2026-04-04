@@ -134,11 +134,6 @@ func (sc *SpoofContext) SendTyped(pktType byte, data []byte) error {
 	return sc.buildAndSend(sc.packet[28 : 28+1+len(data)])
 }
 
-// SendSpoofedUDP is the allocating version for low-frequency use (heartbeat/pong).
-func SendSpoofedUDP(srcIP, dstIP net.IP, srcPort, dstPort int, payload []byte, dstAddr *syscall.SockaddrInet4) error {
-	ctx := NewSpoofContext(srcIP, dstIP, srcPort, dstPort, len(payload)+64, dstAddr)
-	return ctx.buildAndSend(payload)
-}
 
 func internetChecksum(data []byte) uint16 {
 	var sum uint32

@@ -9,36 +9,37 @@ import (
 )
 
 var (
-	rawSocketFD int
 	ipIDCounter uint32
 )
 
-func InitRawSocket(sndbuf int) error {
+// CreateRawSocket creates a single raw socket with IP_HDRINCL.
+// Each worker gets its own socket — no mutex contention.
+func CreateRawSocket(sndbuf int) (int, error) {
 	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW)
 	if err != nil {
-		return fmt.Errorf("socket: %v", err)
+		return -1, fmt.Errorf("socket: %v", err)
 	}
 	if err := syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_HDRINCL, 1); err != nil {
 		syscall.Close(fd)
-		return fmt.Errorf("setsockopt HDRINCL: %v", err)
+		return -1, fmt.Errorf("setsockopt HDRINCL: %v", err)
 	}
 	bufSize := sndbuf
 	if bufSize <= 0 {
 		bufSize = 4 * 1024 * 1024
 	}
 	_ = syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_SNDBUF, bufSize)
-	rawSocketFD = fd
-	return nil
+	return fd, nil
 }
 
-func CloseRawSocket() {
-	if rawSocketFD > 0 {
-		syscall.Close(rawSocketFD)
+// CloseRawSocket closes a raw socket FD.
+func CloseRawSocket(fd int) {
+	if fd > 0 {
+		syscall.Close(fd)
 	}
 }
 
 // SpoofContext holds pre-allocated buffers for zero-allocation packet sending.
-// Each worker goroutine MUST have its own SpoofContext.
+// Each worker goroutine MUST have its own SpoofContext with its own rawFD.
 type SpoofContext struct {
 	ipHdr   []byte
 	udpHdr  []byte
@@ -49,9 +50,10 @@ type SpoofContext struct {
 	dstAddr *syscall.SockaddrInet4
 	srcPort int
 	dstPort int
+	rawFD   int // per-context raw socket — no contention
 }
 
-func NewSpoofContext(srcIP, dstIP net.IP, srcPort, dstPort, maxPayload int, dstAddr *syscall.SockaddrInet4) *SpoofContext {
+func NewSpoofContext(srcIP, dstIP net.IP, srcPort, dstPort, maxPayload int, dstAddr *syscall.SockaddrInet4, rawFD int) *SpoofContext {
 	maxTotal := 20 + 8 + maxPayload
 	maxPseudo := 12 + 8 + maxPayload + 1
 	return &SpoofContext{
@@ -64,12 +66,13 @@ func NewSpoofContext(srcIP, dstIP net.IP, srcPort, dstPort, maxPayload int, dstA
 		dstAddr: dstAddr,
 		srcPort: srcPort,
 		dstPort: dstPort,
+		rawFD:   rawFD,
 	}
 }
 
 // buildAndSend constructs IP+UDP headers and sends the packet.
-// udpPayload is the raw data that goes into the UDP payload area.
 // All work is done in pre-allocated buffers — ZERO heap allocation.
+// Uses per-context rawFD — NO mutex, NO contention between workers.
 func (sc *SpoofContext) buildAndSend(udpPayload []byte) error {
 	payloadLen := len(udpPayload)
 	udpLen := 8 + payloadLen
@@ -122,18 +125,15 @@ func (sc *SpoofContext) buildAndSend(udpPayload []byte) error {
 	copy(sc.packet[20:28], sc.udpHdr)
 	copy(sc.packet[28:28+payloadLen], udpPayload)
 
-	return syscall.Sendto(rawSocketFD, sc.packet[:totalLen], 0, sc.dstAddr)
+	return syscall.Sendto(sc.rawFD, sc.packet[:totalLen], 0, sc.dstAddr)
 }
 
 // SendTyped sends [pktType (1 byte)][data] as UDP payload. Zero-alloc.
 func (sc *SpoofContext) SendTyped(pktType byte, data []byte) error {
-	// Build UDP payload inline in packet buffer: packet[28] = type, packet[29..] = data
 	sc.packet[28] = pktType
 	copy(sc.packet[29:29+len(data)], data)
-	// Point buildAndSend to this region
 	return sc.buildAndSend(sc.packet[28 : 28+1+len(data)])
 }
-
 
 func internetChecksum(data []byte) uint16 {
 	var sum uint32

@@ -20,9 +20,9 @@ type tunPkt struct {
 }
 
 // StartForwarder reads TUN packets and sends via flow-hashed workers.
+// Each worker has its own raw socket FD — zero contention under load.
 // Flow hashing ensures per-destination packet ordering (critical for TCP).
-// Uses sync.Pool for buffer recycling and non-blocking sends for backpressure.
-func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSrcStr string, srcPort int, workers int, mtu int, channelSize int) {
+func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSrcStr string, srcPort int, workers int, mtu int, channelSize int, sndbuf int) {
 	dstIP := net.ParseIP(dstIPStr).To4()
 	srcIP := net.ParseIP(spoofSrcStr).To4()
 	if dstIP == nil || srcIP == nil {
@@ -31,10 +31,8 @@ func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSr
 
 	var dstMap [4]byte
 	copy(dstMap[:], dstIP)
-	dstAddr := &syscall.SockaddrInet4{Port: dstPort, Addr: dstMap}
 
 	// maxPayload must be >= 1 (type byte) + max TUN read size
-	// readBuf is mtu+100, so maxPayload must cover that + type byte + safety
 	maxPayload := 1 + mtu + 150
 
 	// Buffer pool — eliminates per-packet heap allocation
@@ -44,28 +42,40 @@ func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSr
 		},
 	}
 
-	// Per-worker channels: flow hashing sends same-flow packets to same worker
-	// This preserves TCP packet ordering within each flow
+	// Per-worker channels with generous sizing to reduce drops under burst
 	if channelSize <= 0 {
-		channelSize = 10000
+		channelSize = 16384
 	}
 	chSize := channelSize / workers
-	if chSize < 512 {
-		chSize = 512
+	if chSize < 1024 {
+		chSize = 1024
 	}
+
+	// Track raw FDs for cleanup
+	rawFDs := make([]int, 0, workers)
+
 	workerChs := make([]chan tunPkt, workers)
 	for i := 0; i < workers; i++ {
 		workerChs[i] = make(chan tunPkt, chSize)
-		go func(ch chan tunPkt) {
-			ctx := NewSpoofContext(srcIP, dstIP, srcPort, dstPort, maxPayload, dstAddr)
+
+		// Each worker gets its own raw socket — NO mutex, NO contention
+		fd, err := CreateRawSocket(sndbuf)
+		if err != nil {
+			log.Fatalf("Forwarder: worker %d raw socket failed: %v", i, err)
+		}
+		rawFDs = append(rawFDs, fd)
+
+		go func(ch chan tunPkt, workerFD int) {
+			dstAddr := &syscall.SockaddrInet4{Port: dstPort, Addr: dstMap}
+			ctx := NewSpoofContext(srcIP, dstIP, srcPort, dstPort, maxPayload, dstAddr, workerFD)
 			for tp := range ch {
 				_ = ctx.SendTyped(PktTypeData, tp.pb.data[:tp.len])
 				bufPool.Put(tp.pb)
 			}
-		}(workerChs[i])
+		}(workerChs[i], fd)
 	}
 
-	log.Printf("Forwarder: %d flow-hashed workers, TUN -> %s:%d (spoof: %s)", workers, dstIPStr, dstPort, spoofSrcStr)
+	log.Printf("Forwarder: %d workers (per-worker FD), ch=%d, TUN -> %s:%d (spoof: %s)", workers, chSize, dstIPStr, dstPort, spoofSrcStr)
 
 	readBuf := make([]byte, mtu+100)
 	for {
@@ -81,11 +91,11 @@ func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSr
 		copy(pb.data[:n], readBuf[:n])
 		tp := tunPkt{pb: pb, len: n}
 
-		// Flow hash: use inner IP destination (bytes 16-19) to pick worker.
-		// All packets to same dest IP go through same worker → TCP ordering preserved.
+		// Flow hash: use inner IP dst (bytes 16-19) + src (12-15) for better distribution
 		var workerIdx uint
 		if n >= 20 {
-			workerIdx = (uint(readBuf[16]) ^ uint(readBuf[17]) ^ uint(readBuf[18]) ^ uint(readBuf[19])) % uint(workers)
+			workerIdx = (uint(readBuf[12]) ^ uint(readBuf[13]) ^ uint(readBuf[14]) ^ uint(readBuf[15]) ^
+				uint(readBuf[16]) ^ uint(readBuf[17]) ^ uint(readBuf[18]) ^ uint(readBuf[19])) % uint(workers)
 		}
 
 		select {

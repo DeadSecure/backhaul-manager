@@ -8,15 +8,21 @@ import (
 	"time"
 )
 
-// StartHeartbeat sends periodic heartbeat pings and monitors pong responses
-// to detect if the tunnel peer is alive.
-func StartHeartbeat(dstIPStr string, dstPort int, spoofSrcStr string, srcPort int, intervalSec int, timeoutSec int) {
+// StartHeartbeat sends periodic heartbeat pings and monitors pong responses.
+// Gets its own raw socket — completely independent from forwarder/receiver.
+func StartHeartbeat(dstIPStr string, dstPort int, spoofSrcStr string, srcPort int, intervalSec int, timeoutSec int, sndbuf int) {
 	dstIP := net.ParseIP(dstIPStr).To4()
 	srcIP := net.ParseIP(spoofSrcStr).To4()
 
 	var dstMap [4]byte
 	copy(dstMap[:], dstIP)
 	dstAddr := &syscall.SockaddrInet4{Port: dstPort, Addr: dstMap}
+
+	// Heartbeat gets its own raw socket
+	fd, err := CreateRawSocket(sndbuf)
+	if err != nil {
+		log.Fatalf("Heartbeat: raw socket failed: %v", err)
+	}
 
 	ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
 	defer ticker.Stop()
@@ -30,7 +36,7 @@ func StartHeartbeat(dstIPStr string, dstPort int, spoofSrcStr string, srcPort in
 	log.Printf("Heartbeat: every %ds, timeout %ds -> %s:%d", intervalSec, timeoutSec, dstIPStr, dstPort)
 
 	// Pre-allocate context and payload — zero allocation per tick
-	hbCtx := NewSpoofContext(srcIP, dstIP, srcPort, dstPort, 64, dstAddr)
+	hbCtx := NewSpoofContext(srcIP, dstIP, srcPort, dstPort, 64, dstAddr, fd)
 	pingPayload := []byte{PktTypeHeartbeat}
 
 	for range ticker.C {

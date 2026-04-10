@@ -4,21 +4,22 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"syscall"
 )
 
 // ApplyKernelTuning sets critical sysctl parameters for high-throughput tunneling.
 // These are applied at runtime — no persistent changes to /etc/sysctl.conf.
 func ApplyKernelTuning() {
 	tunings := map[string]string{
-		// Socket buffer limits
-		"net.core.rmem_max":        "16777216",
-		"net.core.wmem_max":        "16777216",
-		"net.core.rmem_default":    "1048576",
-		"net.core.wmem_default":    "1048576",
+		// Socket buffer limits (backhaul uses 256MB, we try 128MB first)
+		"net.core.rmem_max":     "134217728",
+		"net.core.wmem_max":     "134217728",
+		"net.core.rmem_default": "1048576",
+		"net.core.wmem_default": "1048576",
 
 		// Network queue depth — absorb bursts without drops
 		"net.core.netdev_max_backlog": "50000",
-		"net.core.somaxconn":          "65535",
+		"net.core.somaxconn":          "65536",
 
 		// TCP memory and performance
 		"net.ipv4.tcp_rmem":                  "4096 1048576 16777216",
@@ -28,6 +29,13 @@ func ApplyKernelTuning() {
 		"net.ipv4.tcp_slow_start_after_idle": "0",
 		"net.ipv4.tcp_mtu_probing":           "1",
 		"net.ipv4.tcp_notsent_lowat":         "16384",
+		"net.ipv4.tcp_window_scaling":        "1",
+
+		// Connection recycling (from backhaul)
+		"net.ipv4.tcp_tw_reuse":       "1",
+		"net.ipv4.tcp_fin_timeout":    "15",
+		"net.ipv4.tcp_max_syn_backlog": "20480",
+		"net.ipv4.ip_local_port_range": "1024 65535",
 
 		// UDP buffers
 		"net.ipv4.udp_rmem_min": "8192",
@@ -45,7 +53,18 @@ func ApplyKernelTuning() {
 			applied++
 		}
 	}
-	log.Printf("Kernel tuning: %d/%d params applied", applied, len(tunings))
+
+	// Increase file descriptor limit (like backhaul: 1048576)
+	var rLimit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit); err == nil {
+		rLimit.Max = 1048576
+		rLimit.Cur = 1048576
+		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit); err == nil {
+			applied++
+		}
+	}
+
+	log.Printf("Kernel tuning: %d params applied (rmem/wmem=128MB, BBR, fd=1M)", applied)
 }
 
 // sysToPath converts "net.core.rmem_max" to "net/core/rmem_max"

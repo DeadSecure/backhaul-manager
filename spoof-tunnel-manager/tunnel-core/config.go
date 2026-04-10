@@ -49,12 +49,13 @@ type SecurityConfig struct {
 }
 
 type TuningConfig struct {
-	AutoTuning    bool   `toml:"auto_tuning"`
-	TuningProfile string `toml:"tuning_profile"`
-	Workers       int    `toml:"workers"`
-	ChannelSize   int    `toml:"channel_size"`
-	SoSndbuf      int    `toml:"so_sndbuf"`
-	BatchSize     int    `toml:"batch_size"`
+	AutoTuning     bool   `toml:"auto_tuning"`
+	TuningProfile  string `toml:"tuning_profile"`
+	Workers        int    `toml:"workers"`
+	ChannelSize    int    `toml:"channel_size"`
+	SoSndbuf       int    `toml:"so_sndbuf"`
+	BatchSize      int    `toml:"batch_size"`
+	PacketMultiply int    `toml:"packet_multiply"` // 1=normal, 2=duplicate each packet (anti packet-loss)
 }
 
 type LoggingConfig struct {

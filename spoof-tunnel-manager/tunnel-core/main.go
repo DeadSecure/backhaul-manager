@@ -70,9 +70,16 @@ func main() {
 	if sndbuf <= 0 {
 		sndbuf = 4 * 1024 * 1024
 	}
+	multiply := cfg.Tuning.PacketMultiply
+	if multiply <= 0 {
+		multiply = 1
+	}
+	if multiply > 3 {
+		multiply = 3 // cap at 3x to prevent bandwidth waste
+	}
 
 	log.Printf("══════════════════════════════════════════════════")
-	log.Printf("  Spoof Tunnel Core v2.0 [per-worker FD, zero-alloc]")
+	log.Printf("  Spoof Tunnel Core v2.1 [per-worker FD, zero-alloc]")
 	log.Printf("  Mode:       %s", cfg.Ipx.Mode)
 	log.Printf("  TUN:        %s (%s <-> %s)", cfg.Tun.Name, cfg.Tun.LocalAddr, cfg.Tun.RemoteAddr)
 	log.Printf("  Listen:     %s:%d", cfg.Ipx.ListenIP, tunnelPort)
@@ -82,6 +89,9 @@ func main() {
 	log.Printf("  Workers:    %d (each with own raw socket)", workers)
 	log.Printf("  MTU:        %d", cfg.Tun.Mtu)
 	log.Printf("  Heartbeat:  %ds interval, %ds timeout", hbInterval, hbTimeout)
+	if multiply > 1 {
+		log.Printf("  Anti-Loss:  x%d packet duplication ENABLED", multiply)
+	}
 	log.Printf("══════════════════════════════════════════════════")
 
 	// ── 5. Start Receiver (own raw socket for pong) ──
@@ -92,5 +102,5 @@ func main() {
 	go StartHeartbeat(cfg.Ipx.DstIP, tunnelPort, cfg.Ipx.SpoofSrcIP, tunnelPort, hbInterval, hbTimeout, sndbuf)
 
 	// ── 7. Start Forwarder (per-worker raw sockets, blocking) ──
-	StartForwarder(tunIfce, cfg.Ipx.DstIP, tunnelPort, cfg.Ipx.SpoofSrcIP, tunnelPort, workers, cfg.Tun.Mtu, cfg.Tuning.ChannelSize, sndbuf)
+	StartForwarder(tunIfce, cfg.Ipx.DstIP, tunnelPort, cfg.Ipx.SpoofSrcIP, tunnelPort, workers, cfg.Tun.Mtu, cfg.Tuning.ChannelSize, sndbuf, multiply)
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -23,7 +24,7 @@ type tunPkt struct {
 // Each worker has its own raw socket FD — zero contention under load.
 // Uses HEAD-DROP strategy: when queue is full, discard OLDEST packet
 // and insert new one. This keeps latency bounded under heavy load.
-func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSrcStr string, srcPort int, workers int, mtu int, channelSize int, sndbuf int) {
+func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSrcStr string, srcPort int, workers int, mtu int, channelSize int, sndbuf int, multiply int) {
 	dstIP := net.ParseIP(dstIPStr).To4()
 	srcIP := net.ParseIP(spoofSrcStr).To4()
 	if dstIP == nil || srcIP == nil {
@@ -71,17 +72,24 @@ func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSr
 		}
 		rawFDs = append(rawFDs, fd)
 
-		go func(ch chan tunPkt, workerFD int) {
+		go func(ch chan tunPkt, workerFD int, pktMultiply int) {
 			dstAddr := &syscall.SockaddrInet4{Port: dstPort, Addr: dstMap}
 			ctx := NewSpoofContext(srcIP, dstIP, srcPort, dstPort, maxPayload, dstAddr, workerFD)
 			for tp := range ch {
-				_ = ctx.SendTyped(PktTypeData, tp.pb.data[:tp.len])
+				// Send packet N times (multiply=1 normal, multiply=2 anti-loss)
+				for m := 0; m < pktMultiply; m++ {
+					_ = ctx.SendTyped(PktTypeData, tp.pb.data[:tp.len])
+				}
 				bufPool.Put(tp.pb)
 			}
-		}(workerChs[i], fd)
+		}(workerChs[i], fd, multiply)
 	}
 
-	log.Printf("Forwarder: %d workers (per-worker FD), ch=%d [head-drop], TUN -> %s:%d (spoof: %s)", workers, chSize, dstIPStr, dstPort, spoofSrcStr)
+	multiplyLabel := ""
+	if multiply > 1 {
+		multiplyLabel = fmt.Sprintf(" [x%d anti-loss]", multiply)
+	}
+	log.Printf("Forwarder: %d workers (per-worker FD), ch=%d [head-drop]%s, TUN -> %s:%d (spoof: %s)", workers, chSize, multiplyLabel, dstIPStr, dstPort, spoofSrcStr)
 
 	readBuf := make([]byte, mtu+100)
 	for {

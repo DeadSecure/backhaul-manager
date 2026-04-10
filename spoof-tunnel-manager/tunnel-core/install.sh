@@ -254,6 +254,7 @@ workers = ${WORKERS}
 channel_size = ${CHANNEL_SIZE}
 so_sndbuf = 0
 batch_size = 2048
+packet_multiply = 1  # 1=normal, 2=duplicate packets (anti packet-loss)
 
 [logging]
 log_level = "info"

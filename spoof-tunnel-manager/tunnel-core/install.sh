@@ -5,7 +5,7 @@
 # ║  Iran (Server) & Kharej (Client) - Peer-to-Peer IPX Tunnel   ║
 # ╚════════════════════════════════════════════════════════════════╝
 
-VERSION="1.0.0"
+VERSION="2.1.0"
 
 # ─── Colors ───────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -21,12 +21,15 @@ NC='\033[0m'
 
 # ─── Paths ────────────────────────────────────────────────────────
 CORE_DIR="/root/spoof-tunnel"
-BINARY_PATH="${CORE_DIR}/spoof-tunnel-core"
+BINARY_SPOOF="${CORE_DIR}/spoof-tunnel-core"
+BINARY_BACKHAUL="${CORE_DIR}/backhaul_premium"
+BINARY_PATH="${BINARY_SPOOF}"  # default engine
 SYSTEMD_DIR="/etc/systemd/system"
 
 # ─── Download Sources ─────────────────────────────────────────────
 MIRROR_URL="http://79.175.188.86:8443/spoof-tunnel"
 GITHUB_URL="https://raw.githubusercontent.com/alireza-2030/backhaul-manager/main/spoof-tunnel-manager/tunnel-core"
+BACKHAUL_DOWNLOAD_URL="http://79.175.188.86:8443/backhaul/backhaul_premium"
 
 # ─── Helpers ──────────────────────────────────────────────────────
 
@@ -652,6 +655,103 @@ do_delete() {
     fi
 }
 
+# ─── Switch Engine ────────────────────────────────────────────────
+
+detect_current_engine() {
+    local svc_name="$1"
+    local svc_file="${SYSTEMD_DIR}/${svc_name}.service"
+    if [ ! -f "$svc_file" ]; then
+        echo "unknown"
+        return
+    fi
+    local exec_line
+    exec_line=$(grep '^ExecStart=' "$svc_file" 2>/dev/null)
+    if echo "$exec_line" | grep -q 'backhaul_premium'; then
+        echo "backhaul"
+    elif echo "$exec_line" | grep -q 'spoof-tunnel-core'; then
+        echo "spoof"
+    else
+        echo "unknown"
+    fi
+}
+
+switch_engine() {
+    echo ""
+    echo -e " ${GREEN}${BOLD}>>> Switch Tunnel Engine${NC}"
+    print_line
+    echo ""
+
+    pick_tunnel || return
+
+    local current_engine
+    current_engine=$(detect_current_engine "${SELECTED_TUNNEL}")
+
+    echo ""
+    echo -e "  Current engine: ${BOLD}${WHITE}${current_engine}${NC}"
+    echo ""
+    echo -e "  ${WHITE}1)${NC} ${CYAN}spoof-tunnel-core${NC}  ${DIM}(custom zero-alloc engine)${NC}"
+    echo -e "  ${WHITE}2)${NC} ${BLUE}backhaul_premium${NC}   ${DIM}(backhaul official binary)${NC}"
+    echo -e "  ${DIM}0)${NC} Cancel"
+    echo ""
+    read -p "  Select engine: " engine_choice
+
+    local new_binary=""
+    local engine_name=""
+    case $engine_choice in
+        1)
+            new_binary="${BINARY_SPOOF}"
+            engine_name="spoof-tunnel-core"
+            ;;
+        2)
+            new_binary="${BINARY_BACKHAUL}"
+            engine_name="backhaul_premium"
+            ;;
+        0) return ;;
+        *) msg_err "Invalid option."; return ;;
+    esac
+
+    # Check binary exists
+    if [ ! -f "${new_binary}" ]; then
+        msg_warn "Binary ${new_binary} not found!"
+        if [ "$engine_choice" = "2" ]; then
+            echo ""
+            read -p "  Download backhaul_premium now? (Y/n): " dl_confirm
+            if [[ ! "$dl_confirm" =~ ^[Nn]$ ]]; then
+                msg_info "Downloading backhaul_premium..."
+                if curl -L --max-time 120 --progress-bar -o "${BINARY_BACKHAUL}" "${BACKHAUL_DOWNLOAD_URL}"; then
+                    chmod +x "${BINARY_BACKHAUL}"
+                    msg_ok "Downloaded: ${BINARY_BACKHAUL}"
+                else
+                    msg_err "Download failed."
+                    return
+                fi
+            else
+                return
+            fi
+        else
+            msg_info "Use menu option 12 to download spoof-tunnel-core first."
+            return
+        fi
+    fi
+
+    # Update systemd service ExecStart
+    local svc_file="${SYSTEMD_DIR}/${SELECTED_TUNNEL}.service"
+    local config_file
+    config_file=$(grep '^ExecStart=' "$svc_file" | sed 's/.*--config //')
+
+    # Stop, update, restart
+    systemctl stop "${SELECTED_TUNNEL}" 2>/dev/null
+
+    sed -i "s|^ExecStart=.*|ExecStart=${new_binary} --config ${config_file}|" "$svc_file"
+
+    systemctl daemon-reload
+    systemctl start "${SELECTED_TUNNEL}"
+
+    echo ""
+    msg_ok "Engine switched to ${BOLD}${engine_name}${NC} for ${SELECTED_TUNNEL}"
+    systemctl status "${SELECTED_TUNNEL}" --no-pager -l 2>/dev/null | head -5
+}
+
 # ─── Main Menu ────────────────────────────────────────────────────
 
 main_menu() {
@@ -674,8 +774,11 @@ main_menu() {
         echo -e "  ${BLUE}10)${NC} View Config"
         echo -e "  ${BLUE}11)${NC} Edit Config"
         echo ""
-        echo -e " ${BOLD}${WHITE}Install & Danger${NC}"
+        echo -e " ${BOLD}${WHITE}Install & Tools${NC}"
         echo -e "  ${MAGENTA}12)${NC} Download Binary"
+        echo -e "  ${YELLOW}14)${NC} Switch Engine (Spoof/Backhaul)"
+        echo ""
+        echo -e " ${BOLD}${WHITE}Danger${NC}"
         echo -e "  ${RED}13)${NC} Delete a Tunnel"
         echo ""
         echo -e "  ${DIM}0)${NC} Exit"
@@ -696,6 +799,7 @@ main_menu() {
             11) do_edit_config ;;
             12) download_binary ;;
             13) do_delete ;;
+            14) switch_engine ;;
             0)
                 echo -e "\n ${GREEN}Goodbye!${NC}\n"
                 exit 0

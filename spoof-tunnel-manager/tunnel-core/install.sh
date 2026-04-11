@@ -752,6 +752,21 @@ switch_engine() {
 
     sed -i "s|^ExecStart=.*|ExecStart=${new_binary} --config ${config_file}|" "$svc_file"
 
+    # Config cleanup based on engine
+    if [ -f "$config_file" ]; then
+        if [ "$engine_choice" = "2" ]; then
+            # Switching to backhaul — remove spoof-only params
+            sed -i '/^packet_multiply/d' "$config_file"
+            msg_info "Removed packet_multiply from config (not supported by backhaul)"
+        elif [ "$engine_choice" = "1" ]; then
+            # Switching to spoof — add packet_multiply if missing
+            if ! grep -q 'packet_multiply' "$config_file"; then
+                sed -i '/^\[tuning\]/a packet_multiply = 1' "$config_file"
+                msg_info "Added packet_multiply = 1 to config"
+            fi
+        fi
+    fi
+
     systemctl daemon-reload
     systemctl start "${SELECTED_TUNNEL}"
 

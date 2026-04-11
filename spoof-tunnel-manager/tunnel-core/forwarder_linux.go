@@ -75,8 +75,17 @@ func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSr
 			dstAddr := &syscall.SockaddrInet4{Port: dstPort, Addr: dstMap}
 			ctx := NewSpoofContext(srcIP, dstIP, srcPort, dstPort, maxPayload, dstAddr, workerFD)
 
-			if pktMultiply == 3 {
-				// FEC mode: buffer 4 packets, generate 1 XOR parity
+			if pktMultiply == 4 {
+				// RS FEC mode: 4 data + 2 parity (Reed-Solomon)
+				rsEnc := NewRSEncoder(mtu + 100)
+				for tp := range ch {
+					rsEnc.EncodeAndSend(tp.pb.data[:tp.len], func(pktType byte, payload []byte) {
+						_ = ctx.SendTyped(pktType, payload)
+					})
+					bufPool.Put(tp.pb)
+				}
+			} else if pktMultiply == 3 {
+				// XOR FEC mode: 4 data + 1 parity
 				fecEnc := NewFECEncoder(4, mtu+100)
 				for tp := range ch {
 					fecEnc.EncodeAndSend(tp.pb.data[:tp.len], func(pktType byte, payload []byte) {
@@ -101,7 +110,9 @@ func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSr
 	case 2:
 		modeLabel = " [x2 anti-loss]"
 	case 3:
-		modeLabel = " [FEC 4:1 anti-loss]"
+		modeLabel = " [XOR FEC 4:1 anti-loss]"
+	case 4:
+		modeLabel = " [RS FEC 4:2 anti-loss]"
 	}
 	log.Printf("Forwarder: %d workers (per-worker FD), ch=%d [head-drop]%s, TUN -> %s:%d (spoof: %s)", workers, chSize, modeLabel, dstIPStr, dstPort, spoofSrcStr)
 

@@ -212,7 +212,8 @@ show_review_box() {
     echo -e "    Channel Size:    ${WHITE}${CHANNEL_SIZE}${NC}"
     case "${PACKET_MULTIPLY}" in
         2) echo -e "    Anti-Loss:       ${GREEN}${BOLD}x2 packet duplication${NC}" ;;
-        3) echo -e "    Anti-Loss:       ${GREEN}${BOLD}FEC (4:1 parity, 25% overhead)${NC}" ;;
+        3) echo -e "    Anti-Loss:       ${GREEN}${BOLD}XOR FEC (4:1 parity, 25% overhead)${NC}" ;;
+        4) echo -e "    Anti-Loss:       ${GREEN}${BOLD}RS FEC (4:2 parity, 50% overhead)${NC}" ;;
         *) echo -e "    Anti-Loss:       ${DIM}OFF (normal)${NC}" ;;
     esac
     echo ""
@@ -359,7 +360,7 @@ setup_iran() {
     read_input "Heartbeat timeout (sec)" "25" HEARTBEAT_TIMEOUT
     read_input "Workers (0=auto)" "0" WORKERS
     read_input "Channel size" "10000" CHANNEL_SIZE
-    read_input "Anti-loss mode (1=off, 2=duplicate, 3=FEC)" "1" PACKET_MULTIPLY
+    read_input "Anti-loss mode (1=off, 2=duplicate, 3=XOR-FEC, 4=RS-FEC)" "1" PACKET_MULTIPLY
 
     # ── Step 4: Review ──
     show_review_box "iran"
@@ -468,7 +469,7 @@ setup_kharej() {
     read_input "Heartbeat timeout (sec)" "25" HEARTBEAT_TIMEOUT
     read_input "Workers (0=auto)" "0" WORKERS
     read_input "Channel size" "10000" CHANNEL_SIZE
-    read_input "Packet multiply (1=normal, 2=anti packet-loss)" "1" PACKET_MULTIPLY
+    read_input "Anti-loss mode (1=off, 2=duplicate, 3=XOR-FEC, 4=RS-FEC)" "1" PACKET_MULTIPLY
 
     # ── Step 4: Review ──
     show_review_box "kharej"

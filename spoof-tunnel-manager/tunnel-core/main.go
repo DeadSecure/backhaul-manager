@@ -74,8 +74,8 @@ func main() {
 	if multiply <= 0 {
 		multiply = 1
 	}
-	if multiply > 3 {
-		multiply = 3 // cap at 3x to prevent bandwidth waste
+	if multiply > 4 {
+		multiply = 4 // cap at 4 (RS FEC)
 	}
 
 	log.Printf("══════════════════════════════════════════════════")
@@ -93,7 +93,9 @@ func main() {
 	case 2:
 		log.Printf("  Anti-Loss:  x2 packet duplication ENABLED")
 	case 3:
-		log.Printf("  Anti-Loss:  FEC mode (4 data + 1 parity, 25%% overhead)")
+		log.Printf("  Anti-Loss:  XOR FEC mode (4 data + 1 parity, 25%% overhead)")
+	case 4:
+		log.Printf("  Anti-Loss:  RS FEC mode (4 data + 2 parity, 50%% overhead)")
 	}
 	log.Printf("══════════════════════════════════════════════════")
 

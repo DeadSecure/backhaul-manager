@@ -73,8 +73,11 @@ func StartReceiver(ifce *water.Interface, listenIP string, listenPort int, mtu i
 	var dedupRing [dedupSize]uint64
 	dedupIdx := 0
 
-	// FEC decoder — for mode 3
+	// FEC decoder — for mode 3 (XOR)
 	fecDec := NewFECDecoder(4)
+
+	// RS decoder — for mode 4 (Reed-Solomon)
+	rsDec := NewRSDecoder()
 
 	buf := make([]byte, mtu+200)
 	for {
@@ -151,6 +154,34 @@ func StartReceiver(ifce *water.Interface, listenIP string, listenPort int, mtu i
 				recovered := fecDec.OnParityShard(seqid, payload[fecHeaderSize:])
 				if recovered != nil && len(recovered) > 0 {
 					_, _ = ifce.Write(recovered)
+				}
+			}
+
+		case PktTypeRSData:
+			// RS data shard — write to TUN immediately + feed to decoder
+			if len(payload) > fecHeaderSize {
+				seqid, shardIdx, _ := parseFECHeader(payload)
+				innerPayload := payload[fecHeaderSize:]
+				if len(innerPayload) > 0 {
+					_, _ = ifce.Write(innerPayload)
+				}
+				recoveredList := rsDec.OnShard(seqid, shardIdx, innerPayload)
+				for _, rec := range recoveredList {
+					if len(rec) > 0 {
+						_, _ = ifce.Write(rec)
+					}
+				}
+			}
+
+		case PktTypeRSParity:
+			// RS parity shard — feed to decoder only
+			if len(payload) > fecHeaderSize {
+				seqid, shardIdx, _ := parseFECHeader(payload)
+				recoveredList := rsDec.OnShard(seqid, shardIdx, payload[fecHeaderSize:])
+				for _, rec := range recoveredList {
+					if len(rec) > 0 {
+						_, _ = ifce.Write(rec)
+					}
 				}
 			}
 

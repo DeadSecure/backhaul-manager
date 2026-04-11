@@ -6,24 +6,36 @@ import (
 	"time"
 )
 
-// FEC Header (4 bytes, prepended to each data/parity payload):
-//   [group_id: uint16][shard_idx: uint8][orig_len: uint8]
+// FEC Header layout (6 bytes, prepended to data/parity payload):
+//   [seqid: uint32][shard_idx: uint8][orig_len: uint8]
 //
-// shard_idx: 0..N-1 = data shards, N = parity shard
-// orig_len: original payload length (before zero-padding)
-const fecHeaderSize = 4
+// seqid: monotonically increasing sequence number for the FEC group
+// shard_idx: 0..N-1 = data shards, N..N+P-1 = parity shards
+// orig_len: original data payload length before zero-padding (0 for parity)
+//
+// Design decisions (inspired by kcp-go):
+//   - uint32 seqid prevents wrap-around collision at high PPS
+//   - Separate PktTypeFECData / PktTypeFECParity byte in the wire header
+//     eliminates the need to "guess" whether a Data packet is FEC-encoded
+//   - Encoder is lock-free (one encoder per worker goroutine)
+//   - Decoder uses sync.Pool for shard buffers to minimize GC pressure
+const fecHeaderSize = 6
 
 // ── FEC Encoder ──────────────────────────────────────────────
-// Buffers data shards, generates XOR parity every N packets.
-// Thread-safe: one encoder per worker goroutine.
+// One encoder per worker goroutine — NO locks needed.
+// Buffers N data shards, generates 1 XOR parity, sends via callback.
+// Zero allocations in steady state: all buffers pre-allocated.
 type FECEncoder struct {
-	groupSize int // N data shards per group
-	groupID   uint16
-	idx       int // current shard index in group
-	maxLen    int // max payload size seen in this group
-	shards    [][]byte
-	parityBuf []byte // pre-allocated parity buffer
-	mu        sync.Mutex
+	groupSize int    // data shards per FEC group (e.g. 4)
+	next      uint32 // monotonic sequence number (like kcp-go)
+
+	shardCount int // shards buffered so far in current group
+	maxLen     int // max payload length in current group
+
+	// Pre-allocated storage — reused every group
+	shards    [][]byte // [groupSize] shard copies (zero-padded)
+	parityBuf []byte   // XOR accumulator
+	sendBuf   []byte   // temporary buffer for building packets
 }
 
 func NewFECEncoder(groupSize, maxPayload int) *FECEncoder {
@@ -35,193 +47,203 @@ func NewFECEncoder(groupSize, maxPayload int) *FECEncoder {
 		groupSize: groupSize,
 		shards:    shards,
 		parityBuf: make([]byte, maxPayload),
+		sendBuf:   make([]byte, fecHeaderSize+maxPayload),
 	}
 }
 
-// AddAndEncode adds a data shard and returns packets to send.
-// Returns: list of (pktType, payload) tuples to send.
-// When group is full, returns N data + 1 parity packet.
-// Otherwise returns just the data packet immediately.
-func (e *FECEncoder) AddAndEncode(data []byte) (packets []FECSendItem) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
+// EncodeAndSend processes one TUN packet:
+//   - Immediately sends it as PktTypeFECData with an FEC header
+//   - When the group fills (N data shards), also sends 1 PktTypeFECParity
+//
+// Zero allocations — sendFn receives a borrowed buffer valid only during call.
+func (e *FECEncoder) EncodeAndSend(data []byte, sendFn func(pktType byte, payload []byte)) {
 	dataLen := len(data)
 	if dataLen > len(e.shards[0]) {
 		dataLen = len(e.shards[0])
 	}
 
-	// Copy data into shard buffer (zero-padded)
-	copy(e.shards[e.idx][:dataLen], data[:dataLen])
-	for i := dataLen; i < len(e.shards[e.idx]); i++ {
-		e.shards[e.idx][i] = 0
+	// Store data in shard buffer, zero-pad tail
+	copy(e.shards[e.shardCount][:dataLen], data[:dataLen])
+	for i := dataLen; i < len(e.shards[e.shardCount]); i++ {
+		e.shards[e.shardCount][i] = 0
 	}
-
 	if dataLen > e.maxLen {
 		e.maxLen = dataLen
 	}
 
-	// Build FEC header for this data shard
-	hdr := makeFECHeader(e.groupID, uint8(e.idx), uint8(dataLen))
+	// Build and send data shard: [seqid(4)][shard_idx(1)][orig_len(1)][payload]
+	binary.BigEndian.PutUint32(e.sendBuf[0:4], e.next)
+	e.sendBuf[4] = uint8(e.shardCount)
+	e.sendBuf[5] = uint8(dataLen) // NOTE: max 255 — fine, TUN MTU is written here as-is
+	copy(e.sendBuf[fecHeaderSize:], data[:dataLen])
+	sendFn(PktTypeFECData, e.sendBuf[:fecHeaderSize+dataLen])
+	e.next++
 
-	// Always send data immediately (don't wait for group completion)
-	item := FECSendItem{
-		PktType: PktTypeData,
-		Payload: make([]byte, fecHeaderSize+dataLen),
-	}
-	copy(item.Payload[:fecHeaderSize], hdr[:])
-	copy(item.Payload[fecHeaderSize:], data[:dataLen])
-	packets = append(packets, item)
+	e.shardCount++
 
-	e.idx++
-
-	// Group complete — generate parity
-	if e.idx >= e.groupSize {
-		parity := e.generateParity()
-		parityItem := FECSendItem{
-			PktType: PktTypeFEC,
-			Payload: make([]byte, fecHeaderSize+e.maxLen),
+	// Group complete — generate XOR parity
+	if e.shardCount >= e.groupSize {
+		// XOR all shards (only up to maxLen for efficiency)
+		for i := 0; i < e.maxLen; i++ {
+			e.parityBuf[i] = 0
 		}
-		parityHdr := makeFECHeader(e.groupID, uint8(e.groupSize), uint8(0))
-		copy(parityItem.Payload[:fecHeaderSize], parityHdr[:])
-		copy(parityItem.Payload[fecHeaderSize:], parity[:e.maxLen])
-		packets = append(packets, parityItem)
+		for s := 0; s < e.groupSize; s++ {
+			for i := 0; i < e.maxLen; i++ {
+				e.parityBuf[i] ^= e.shards[s][i]
+			}
+		}
+
+		// Send parity: [seqid(4)][shard_idx=groupSize(1)][0(1)][parity_data]
+		binary.BigEndian.PutUint32(e.sendBuf[0:4], e.next)
+		e.sendBuf[4] = uint8(e.groupSize) // parity index = N
+		e.sendBuf[5] = 0                  // orig_len=0 for parity
+		copy(e.sendBuf[fecHeaderSize:], e.parityBuf[:e.maxLen])
+		sendFn(PktTypeFECParity, e.sendBuf[:fecHeaderSize+e.maxLen])
+		e.next++
 
 		// Reset for next group
-		e.groupID++
-		e.idx = 0
+		e.shardCount = 0
 		e.maxLen = 0
 	}
-
-	return packets
-}
-
-// Flush sends remaining data without parity (called on timeout).
-func (e *FECEncoder) Flush() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.idx > 0 {
-		e.groupID++
-		e.idx = 0
-		e.maxLen = 0
-	}
-}
-
-func (e *FECEncoder) generateParity() []byte {
-	// XOR all shards
-	maxLen := e.maxLen
-	for i := 0; i < maxLen; i++ {
-		e.parityBuf[i] = 0
-	}
-	for s := 0; s < e.groupSize; s++ {
-		for i := 0; i < maxLen; i++ {
-			e.parityBuf[i] ^= e.shards[s][i]
-		}
-	}
-	return e.parityBuf
 }
 
 // ── FEC Decoder ──────────────────────────────────────────────
-// Collects shards by group_id, reconstructs missing data.
+// Collects shards by group, reconstructs 1 missing data shard via XOR.
+// Uses sync.Pool for shard buffers to minimize GC pressure.
+// Expired groups cleaned by background goroutine.
 
-type FECGroup struct {
-	shards    [][]byte // data shards (nil = missing)
-	parity    []byte   // parity shard (nil = missing)
-	lens      []uint8  // original lengths per shard
-	received  int      // count of received data shards
+var decoderBufPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 2048)
+		return &buf
+	},
+}
+
+type fecGroup struct {
+	shards    []*[]byte // pooled buffers (nil = not received)
+	shardLens []int     // actual data length per shard (0 = not received)
+	origLens  []uint8   // orig_len from FEC header
+	parity    *[]byte   // pooled parity buffer (nil = not received)
+	parityLen int       // actual parity data length
+	received  int       // count of data shards received
 	hasParity bool
 	maxLen    int
-	timestamp time.Time
+	created   time.Time
 }
 
 type FECDecoder struct {
 	groupSize int
-	groups    map[uint16]*FECGroup
+	groups    map[uint32]*fecGroup // key = seqid of first shard in group
 	mu        sync.Mutex
-	maxPayload int
 }
 
-func NewFECDecoder(groupSize, maxPayload int) *FECDecoder {
+func NewFECDecoder(groupSize int) *FECDecoder {
 	d := &FECDecoder{
-		groupSize:  groupSize,
-		groups:     make(map[uint16]*FECGroup),
-		maxPayload: maxPayload,
+		groupSize: groupSize,
+		groups:    make(map[uint32]*fecGroup),
 	}
-	// Start cleanup goroutine for expired groups
 	go d.cleanupLoop()
 	return d
 }
 
-// OnDataShard processes an incoming data shard.
-// Returns recovered data if a missing shard was reconstructed, or nil.
-func (d *FECDecoder) OnDataShard(groupID uint16, shardIdx uint8, origLen uint8, payload []byte) []byte {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	g := d.getOrCreateGroup(groupID)
-	if int(shardIdx) >= d.groupSize || g.shards[shardIdx] != nil {
-		return nil // invalid index or duplicate
-	}
-
-	g.shards[shardIdx] = make([]byte, len(payload))
-	copy(g.shards[shardIdx], payload)
-	g.lens[shardIdx] = origLen
-	g.received++
-	if len(payload) > g.maxLen {
-		g.maxLen = len(payload)
-	}
-
-	return d.tryRecover(groupID, g)
+// seqid-to-groupKey: the first seqid in the group.
+// Group contains seqids: [key, key+1, ..., key+groupSize]
+// where key+groupSize = parity.
+func (d *FECDecoder) groupKey(seqid uint32) uint32 {
+	shardSize := uint32(d.groupSize + 1) // data + parity
+	return (seqid / shardSize) * shardSize
 }
 
-// OnParityShard processes an incoming parity shard.
-// Returns recovered data if a missing shard was reconstructed, or nil.
-func (d *FECDecoder) OnParityShard(groupID uint16, payload []byte) []byte {
+// OnDataShard processes an incoming FEC data shard.
+// Returns recovered payload if recovery happened, otherwise nil.
+func (d *FECDecoder) OnDataShard(seqid uint32, shardIdx uint8, origLen uint8, payload []byte) []byte {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	g := d.getOrCreateGroup(groupID)
+	key := d.groupKey(seqid)
+	g := d.getOrCreate(key)
+
+	if int(shardIdx) >= d.groupSize || g.shards[shardIdx] != nil {
+		return nil // invalid or duplicate
+	}
+
+	// Copy payload to pooled buffer
+	bufPtr := decoderBufPool.Get().(*[]byte)
+	buf := *bufPtr
+	if len(payload) > len(buf) {
+		buf = make([]byte, len(payload))
+		*bufPtr = buf
+	}
+	n := copy(buf[:len(payload)], payload)
+
+	g.shards[shardIdx] = bufPtr
+	g.shardLens[shardIdx] = n
+	g.origLens[shardIdx] = origLen
+	g.received++
+	if n > g.maxLen {
+		g.maxLen = n
+	}
+
+	return d.tryRecover(key, g)
+}
+
+// OnParityShard processes an incoming FEC parity shard.
+func (d *FECDecoder) OnParityShard(seqid uint32, payload []byte) []byte {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	key := d.groupKey(seqid)
+	g := d.getOrCreate(key)
+
 	if g.hasParity {
 		return nil // duplicate
 	}
 
-	g.parity = make([]byte, len(payload))
-	copy(g.parity, payload)
+	bufPtr := decoderBufPool.Get().(*[]byte)
+	buf := *bufPtr
+	if len(payload) > len(buf) {
+		buf = make([]byte, len(payload))
+		*bufPtr = buf
+	}
+	n := copy(buf[:len(payload)], payload)
+
+	g.parity = bufPtr
+	g.parityLen = n
 	g.hasParity = true
-	if len(payload) > g.maxLen {
-		g.maxLen = len(payload)
+	if n > g.maxLen {
+		g.maxLen = n
 	}
 
-	return d.tryRecover(groupID, g)
+	return d.tryRecover(key, g)
 }
 
-func (d *FECDecoder) getOrCreateGroup(groupID uint16) *FECGroup {
-	g, ok := d.groups[groupID]
+func (d *FECDecoder) getOrCreate(key uint32) *fecGroup {
+	g, ok := d.groups[key]
 	if !ok {
-		g = &FECGroup{
-			shards:    make([][]byte, d.groupSize),
-			lens:      make([]uint8, d.groupSize),
-			timestamp: time.Now(),
+		g = &fecGroup{
+			shards:    make([]*[]byte, d.groupSize),
+			shardLens: make([]int, d.groupSize),
+			origLens:  make([]uint8, d.groupSize),
+			created:   time.Now(),
 		}
-		d.groups[groupID] = g
+		d.groups[key] = g
 	}
 	return g
 }
 
-// tryRecover checks if exactly 1 data shard is missing and parity is available.
-// If so, recovers it via XOR and returns the recovered payload.
-func (d *FECDecoder) tryRecover(groupID uint16, g *FECGroup) []byte {
+// tryRecover attempts XOR recovery when exactly 1 data shard is missing.
+func (d *FECDecoder) tryRecover(key uint32, g *fecGroup) []byte {
 	if g.received >= d.groupSize {
-		// All data received — no recovery needed, clean up
-		delete(d.groups, groupID)
+		// All data received — clean up, no recovery needed
+		d.releaseGroup(key)
 		return nil
 	}
 
 	if g.received != d.groupSize-1 || !g.hasParity {
-		return nil // need exactly N-1 data + parity to recover
+		return nil // need exactly N-1 data + parity
 	}
 
-	// Find the missing shard index
+	// Find missing shard
 	missingIdx := -1
 	for i := 0; i < d.groupSize; i++ {
 		if g.shards[i] == nil {
@@ -230,43 +252,56 @@ func (d *FECDecoder) tryRecover(groupID uint16, g *FECGroup) []byte {
 		}
 	}
 	if missingIdx < 0 {
-		delete(d.groups, groupID)
+		d.releaseGroup(key)
 		return nil
 	}
 
-	// Recover: XOR parity with all present shards
+	// XOR-recover: result = parity ^ shard[0] ^ shard[1] ^ ... (skip missing)
 	recovered := make([]byte, g.maxLen)
-	copy(recovered, g.parity)
+	parityData := (*g.parity)[:g.parityLen]
+	copy(recovered, parityData)
+
 	for i := 0; i < d.groupSize; i++ {
 		if i == missingIdx {
 			continue
 		}
-		for j := 0; j < g.maxLen && j < len(g.shards[i]); j++ {
-			recovered[j] ^= g.shards[i][j]
+		sdata := (*g.shards[i])[:g.shardLens[i]]
+		for j := 0; j < len(sdata) && j < g.maxLen; j++ {
+			recovered[j] ^= sdata[j]
 		}
 	}
 
-	// Figure out original length from reverse XOR of lens
-	// We stored orig_len in the FEC header, but the missing shard's header
-	// was never received. We need to reconstruct it.
-	// For simplicity, use maxLen as the recovered length
-	// (the parity covers all zero-padded data, so trailing zeros are harmless)
-	// TCP/IP stack will handle any extra zeros.
-
-	// Clean up
-	delete(d.groups, groupID)
+	d.releaseGroup(key)
 	return recovered[:g.maxLen]
 }
 
+// releaseGroup returns all pooled buffers and removes the group.
+func (d *FECDecoder) releaseGroup(key uint32) {
+	g, ok := d.groups[key]
+	if !ok {
+		return
+	}
+	for i := range g.shards {
+		if g.shards[i] != nil {
+			decoderBufPool.Put(g.shards[i])
+		}
+	}
+	if g.parity != nil {
+		decoderBufPool.Put(g.parity)
+	}
+	delete(d.groups, key)
+}
+
+// cleanupLoop removes expired incomplete groups every 500ms.
 func (d *FECDecoder) cleanupLoop() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
 		d.mu.Lock()
 		now := time.Now()
-		for gid, g := range d.groups {
-			if now.Sub(g.timestamp) > 2*time.Second {
-				delete(d.groups, gid)
+		for key, g := range d.groups {
+			if now.Sub(g.created) > 2*time.Second {
+				d.releaseGroup(key)
 			}
 		}
 		d.mu.Unlock()
@@ -275,25 +310,12 @@ func (d *FECDecoder) cleanupLoop() {
 
 // ── Helpers ──────────────────────────────────────────────────
 
-type FECSendItem struct {
-	PktType byte
-	Payload []byte // [FEC header (4 bytes)][data]
-}
-
-func makeFECHeader(groupID uint16, shardIdx, origLen uint8) [fecHeaderSize]byte {
-	var hdr [fecHeaderSize]byte
-	binary.BigEndian.PutUint16(hdr[0:2], groupID)
-	hdr[2] = shardIdx
-	hdr[3] = origLen
-	return hdr
-}
-
-func parseFECHeader(data []byte) (groupID uint16, shardIdx uint8, origLen uint8) {
+func parseFECHeader(data []byte) (seqid uint32, shardIdx uint8, origLen uint8) {
 	if len(data) < fecHeaderSize {
 		return 0, 0, 0
 	}
-	groupID = binary.BigEndian.Uint16(data[0:2])
-	shardIdx = data[2]
-	origLen = data[3]
+	seqid = binary.BigEndian.Uint32(data[0:4])
+	shardIdx = data[4]
+	origLen = data[5]
 	return
 }

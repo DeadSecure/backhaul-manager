@@ -79,10 +79,9 @@ func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSr
 				// FEC mode: buffer 4 packets, generate 1 XOR parity
 				fecEnc := NewFECEncoder(4, mtu+100)
 				for tp := range ch {
-					items := fecEnc.AddAndEncode(tp.pb.data[:tp.len])
-					for _, item := range items {
-						_ = ctx.SendTyped(item.PktType, item.Payload)
-					}
+					fecEnc.EncodeAndSend(tp.pb.data[:tp.len], func(pktType byte, payload []byte) {
+						_ = ctx.SendTyped(pktType, payload)
+					})
 					bufPool.Put(tp.pb)
 				}
 			} else {

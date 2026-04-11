@@ -66,7 +66,15 @@ func StartReceiver(ifce *water.Interface, listenIP string, listenPort int, mtu i
 	pongCtx := NewSpoofContext(pongSrcIP, pongDstIP, listenPort, dstPort, 64, pongAddr, pongFD)
 	pongPayload := []byte{PktTypePong}
 
-	log.Printf("Receiver on %s:%d (accept from: %s) [zero-alloc mode]", listenIP, listenPort, expectedSrcIP)
+	log.Printf("Receiver on %s:%d (accept from: %s) [zero-alloc mode, dedup ON]", listenIP, listenPort, expectedSrcIP)
+
+	// Dedup ring buffer — catches duplicates from packet_multiply (mode 2)
+	const dedupSize = 8
+	var dedupRing [dedupSize]uint64
+	dedupIdx := 0
+
+	// FEC decoder — for mode 3
+	fecDec := NewFECDecoder(4, mtu+100)
 
 	buf := make([]byte, mtu+200)
 	for {
@@ -96,8 +104,64 @@ func StartReceiver(ifce *water.Interface, listenIP string, listenPort int, mtu i
 
 		switch pktType {
 		case PktTypeData:
-			if len(payload) > 0 {
+			if len(payload) >= fecHeaderSize+1 {
+				// Check if this is a FEC-encoded data packet (has FEC header)
+				// FEC packets always have header at start of payload
+				groupID, shardIdx, origLen := parseFECHeader(payload)
+
+				if groupID > 0 || shardIdx > 0 || origLen > 0 {
+					// FEC mode data packet — extract inner payload after header
+					innerPayload := payload[fecHeaderSize:]
+					if origLen > 0 && int(origLen) <= len(innerPayload) {
+						innerPayload = innerPayload[:origLen]
+					}
+
+					// Write to TUN immediately (don't wait for group)
+					if len(innerPayload) > 0 {
+						_, _ = ifce.Write(innerPayload)
+					}
+
+					// Feed to FEC decoder for potential recovery of lost shards
+					recovered := fecDec.OnDataShard(groupID, shardIdx, origLen, payload[fecHeaderSize:])
+					if recovered != nil && len(recovered) > 0 {
+						_, _ = ifce.Write(recovered)
+					}
+				} else {
+					// Non-FEC data packet (mode 1 or 2)
+					// Dedup for mode 2
+					if len(payload) >= 20 {
+						fp := uint64(payload[4])<<40 | uint64(payload[5])<<32 |
+							uint64(payload[12])<<24 | uint64(payload[13])<<16 |
+							uint64(payload[14])<<8 | uint64(payload[15]) |
+							uint64(payload[16])<<56 | uint64(payload[17])<<48
+
+						isDup := false
+						for i := 0; i < dedupSize; i++ {
+							if dedupRing[i] == fp {
+								isDup = true
+								break
+							}
+						}
+						if isDup {
+							continue
+						}
+						dedupRing[dedupIdx] = fp
+						dedupIdx = (dedupIdx + 1) & (dedupSize - 1)
+					}
+					_, _ = ifce.Write(payload)
+				}
+			} else if len(payload) > 0 {
 				_, _ = ifce.Write(payload)
+			}
+
+		case PktTypeFEC:
+			// FEC parity packet — feed to decoder
+			if len(payload) > fecHeaderSize {
+				groupID, _, _ := parseFECHeader(payload)
+				recovered := fecDec.OnParityShard(groupID, payload[fecHeaderSize:])
+				if recovered != nil && len(recovered) > 0 {
+					_, _ = ifce.Write(recovered)
+				}
 			}
 
 		case PktTypeHeartbeat:
@@ -108,3 +172,4 @@ func StartReceiver(ifce *water.Interface, listenIP string, listenPort int, mtu i
 		}
 	}
 }
+

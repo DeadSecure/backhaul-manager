@@ -210,11 +210,11 @@ show_review_box() {
     echo -e "    Heartbeat:       ${WHITE}${HEARTBEAT_INTERVAL}s interval / ${HEARTBEAT_TIMEOUT}s timeout${NC}"
     echo -e "    Workers:         ${WHITE}${WORKERS} (0=auto)${NC}"
     echo -e "    Channel Size:    ${WHITE}${CHANNEL_SIZE}${NC}"
-    if [ "${PACKET_MULTIPLY}" -gt 1 ] 2>/dev/null; then
-        echo -e "    Anti-Loss:       ${GREEN}${BOLD}x${PACKET_MULTIPLY} packet duplication${NC}"
-    else
-        echo -e "    Anti-Loss:       ${DIM}OFF (normal)${NC}"
-    fi
+    case "${PACKET_MULTIPLY}" in
+        2) echo -e "    Anti-Loss:       ${GREEN}${BOLD}x2 packet duplication${NC}" ;;
+        3) echo -e "    Anti-Loss:       ${GREEN}${BOLD}FEC (4:1 parity, 25% overhead)${NC}" ;;
+        *) echo -e "    Anti-Loss:       ${DIM}OFF (normal)${NC}" ;;
+    esac
     echo ""
     print_double_line
     echo ""
@@ -359,7 +359,7 @@ setup_iran() {
     read_input "Heartbeat timeout (sec)" "25" HEARTBEAT_TIMEOUT
     read_input "Workers (0=auto)" "0" WORKERS
     read_input "Channel size" "10000" CHANNEL_SIZE
-    read_input "Packet multiply (1=normal, 2=anti packet-loss)" "1" PACKET_MULTIPLY
+    read_input "Anti-loss mode (1=off, 2=duplicate, 3=FEC)" "1" PACKET_MULTIPLY
 
     # ── Step 4: Review ──
     show_review_box "iran"

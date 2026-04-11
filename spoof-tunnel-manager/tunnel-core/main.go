@@ -89,8 +89,11 @@ func main() {
 	log.Printf("  Workers:    %d (each with own raw socket)", workers)
 	log.Printf("  MTU:        %d", cfg.Tun.Mtu)
 	log.Printf("  Heartbeat:  %ds interval, %ds timeout", hbInterval, hbTimeout)
-	if multiply > 1 {
-		log.Printf("  Anti-Loss:  x%d packet duplication ENABLED", multiply)
+	switch multiply {
+	case 2:
+		log.Printf("  Anti-Loss:  x2 packet duplication ENABLED")
+	case 3:
+		log.Printf("  Anti-Loss:  FEC mode (4 data + 1 parity, 25%% overhead)")
 	}
 	log.Printf("══════════════════════════════════════════════════")
 

@@ -6,4 +6,5 @@ const (
 	PktTypeData      byte = 0x01 // TUN packet encapsulated in UDP
 	PktTypeHeartbeat byte = 0x02 // Heartbeat ping
 	PktTypePong      byte = 0x03 // Heartbeat pong (ACK)
+	PktTypeFEC       byte = 0x04 // FEC parity packet
 )

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -75,21 +74,37 @@ func StartForwarder(ifce *water.Interface, dstIPStr string, dstPort int, spoofSr
 		go func(ch chan tunPkt, workerFD int, pktMultiply int) {
 			dstAddr := &syscall.SockaddrInet4{Port: dstPort, Addr: dstMap}
 			ctx := NewSpoofContext(srcIP, dstIP, srcPort, dstPort, maxPayload, dstAddr, workerFD)
-			for tp := range ch {
-				// Send packet N times (multiply=1 normal, multiply=2 anti-loss)
-				for m := 0; m < pktMultiply; m++ {
-					_ = ctx.SendTyped(PktTypeData, tp.pb.data[:tp.len])
+
+			if pktMultiply == 3 {
+				// FEC mode: buffer 4 packets, generate 1 XOR parity
+				fecEnc := NewFECEncoder(4, mtu+100)
+				for tp := range ch {
+					items := fecEnc.AddAndEncode(tp.pb.data[:tp.len])
+					for _, item := range items {
+						_ = ctx.SendTyped(item.PktType, item.Payload)
+					}
+					bufPool.Put(tp.pb)
 				}
-				bufPool.Put(tp.pb)
+			} else {
+				// Normal (1) or duplicate (2) mode
+				for tp := range ch {
+					for m := 0; m < pktMultiply; m++ {
+						_ = ctx.SendTyped(PktTypeData, tp.pb.data[:tp.len])
+					}
+					bufPool.Put(tp.pb)
+				}
 			}
 		}(workerChs[i], fd, multiply)
 	}
 
-	multiplyLabel := ""
-	if multiply > 1 {
-		multiplyLabel = fmt.Sprintf(" [x%d anti-loss]", multiply)
+	modeLabel := ""
+	switch multiply {
+	case 2:
+		modeLabel = " [x2 anti-loss]"
+	case 3:
+		modeLabel = " [FEC 4:1 anti-loss]"
 	}
-	log.Printf("Forwarder: %d workers (per-worker FD), ch=%d [head-drop]%s, TUN -> %s:%d (spoof: %s)", workers, chSize, multiplyLabel, dstIPStr, dstPort, spoofSrcStr)
+	log.Printf("Forwarder: %d workers (per-worker FD), ch=%d [head-drop]%s, TUN -> %s:%d (spoof: %s)", workers, chSize, modeLabel, dstIPStr, dstPort, spoofSrcStr)
 
 	readBuf := make([]byte, mtu+100)
 	for {

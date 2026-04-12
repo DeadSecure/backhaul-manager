@@ -111,6 +111,17 @@ func StartRelayListener(ifce *water.Interface, port int, mtu int) {
 
 	log.Printf("RelayListener: accepting download relay on :%d", port)
 
+	// FEC decoder — for mode 3 (XOR)
+	fecDec := NewFECDecoder(4)
+
+	// RS decoder — for mode 4 (Reed-Solomon)
+	rsDec := NewRSDecoder()
+
+	// Dedup ring buffer — catches duplicates from packet_multiply (mode 2)
+	const dedupSize = 8
+	var dedupRing [dedupSize]uint64
+	dedupIdx := 0
+
 	buf := make([]byte, mtu+200)
 	for {
 		n, _, err := conn.ReadFromUDP(buf)
@@ -128,26 +139,79 @@ func StartRelayListener(ifce *water.Interface, port int, mtu int) {
 		payload := buf[1:n]
 
 		switch pktType {
-		case PktTypeData, PktTypeFECData, PktTypeRSData:
-			// Data packet — extract inner payload and write to TUN
-			if pktType == PktTypeFECData || pktType == PktTypeRSData {
-				if len(payload) > fecHeaderSize {
-					innerPayload := payload[fecHeaderSize:]
-					if len(innerPayload) > 0 {
-						_, _ = ifce.Write(innerPayload)
-					}
+		case PktTypeFECData:
+			if len(payload) > fecHeaderSize {
+				seqid, shardIdx, origLen := parseFECHeader(payload)
+				innerPayload := payload[fecHeaderSize:]
+				// Write to TUN immediately
+				if len(innerPayload) > 0 {
+					_, _ = ifce.Write(innerPayload)
 				}
-			} else {
-				if len(payload) > 0 {
-					_, _ = ifce.Write(payload)
+				// Feed to FEC decoder
+				recovered := fecDec.OnDataShard(seqid, shardIdx, origLen, innerPayload)
+				if recovered != nil && len(recovered) > 0 {
+					_, _ = ifce.Write(recovered)
 				}
 			}
 
-		case PktTypeFECParity, PktTypeRSParity:
-			// Parity packets from relay — currently ignored
-			// (FEC decoder on main receiver handles direct packets)
-			// For split-path, we'd need a separate decoder here
-			// TODO: integrate FEC decoder if needed
+		case PktTypeFECParity:
+			if len(payload) > fecHeaderSize {
+				seqid, _, _ := parseFECHeader(payload)
+				recovered := fecDec.OnParityShard(seqid, payload[fecHeaderSize:])
+				if recovered != nil && len(recovered) > 0 {
+					_, _ = ifce.Write(recovered)
+				}
+			}
+
+		case PktTypeRSData:
+			if len(payload) > fecHeaderSize {
+				seqid, shardIdx, _ := parseFECHeader(payload)
+				innerPayload := payload[fecHeaderSize:]
+				if len(innerPayload) > 0 {
+					_, _ = ifce.Write(innerPayload)
+				}
+				recoveredList := rsDec.OnShard(seqid, shardIdx, innerPayload)
+				for _, rec := range recoveredList {
+					if len(rec) > 0 {
+						_, _ = ifce.Write(rec)
+					}
+				}
+			}
+
+		case PktTypeRSParity:
+			if len(payload) > fecHeaderSize {
+				seqid, shardIdx, _ := parseFECHeader(payload)
+				recoveredList := rsDec.OnShard(seqid, shardIdx, payload[fecHeaderSize:])
+				for _, rec := range recoveredList {
+					if len(rec) > 0 {
+						_, _ = ifce.Write(rec)
+					}
+				}
+			}
+
+		case PktTypeData:
+			if len(payload) >= 20 {
+				fp := uint64(payload[4])<<40 | uint64(payload[5])<<32 |
+					uint64(payload[12])<<24 | uint64(payload[13])<<16 |
+					uint64(payload[14])<<8 | uint64(payload[15]) |
+					uint64(payload[16])<<56 | uint64(payload[17])<<48
+
+				isDup := false
+				for i := 0; i < dedupSize; i++ {
+					if dedupRing[i] == fp {
+						isDup = true
+						break
+					}
+				}
+				if isDup {
+					continue
+				}
+				dedupRing[dedupIdx] = fp
+				dedupIdx = (dedupIdx + 1) & (dedupSize - 1)
+			}
+			if len(payload) > 0 {
+				_, _ = ifce.Write(payload)
+			}
 
 		case PktTypeHeartbeat:
 			// Ignore heartbeats from relay path

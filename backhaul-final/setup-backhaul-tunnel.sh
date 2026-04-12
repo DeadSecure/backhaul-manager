@@ -1002,6 +1002,46 @@ watchdog_status() {
     fi
 }
 
+scan_and_sync_configs() {
+    echo ""
+    echo -e " ${GREEN}${BOLD}>>> Scan & Sync Services for TOML configs${NC}"
+    print_line
+
+    if [ ! -d "${CORE_DIR}" ]; then
+        msg_err "Core directory not found: ${CORE_DIR}"
+        return
+    fi
+    
+    local found=0
+    for toml_file in "${CORE_DIR}"/*.toml; do
+        [ -f "$toml_file" ] || continue
+        
+        local filename=$(basename "$toml_file")
+        local svc_name="backhaul-${filename%.toml}"
+        local svc_path="${SYSTEMD_DIR}/${svc_name}.service"
+        
+        if [ ! -f "$svc_path" ]; then
+            found=1
+            msg_info "Missing service for ${filename}. Creating..."
+            
+            local desc_mode="Tunnel"
+            if [[ "$filename" == iran* ]]; then desc_mode="Iran"; fi
+            if [[ "$filename" == kharej* ]]; then desc_mode="Kharej"; fi
+            
+            create_systemd_service "${svc_name}" "${toml_file}" "Backhaul ${desc_mode} - ${filename%.toml}"
+            msg_ok "Service created and started: ${svc_name}"
+        fi
+    done
+    
+    if [ $found -eq 0 ]; then
+        msg_ok "All TOML configs already have corresponding services."
+    else
+        echo ""
+        msg_ok "Sync completed."
+        echo -e " ${CYAN}Use option 3 to list all tunnels and check their status.${NC}"
+    fi
+}
+
 # ─── Main Menu ────────────────────────────────────────────────────
 
 main_menu() {
@@ -1017,6 +1057,7 @@ main_menu() {
         echo -e "  ${YELLOW}5)${NC} Restart a Tunnel"
         echo -e "  ${YELLOW}6)${NC} Stop a Tunnel"
         echo -e "  ${MAGENTA}7)${NC} Stop & Disable (keep files)"
+        echo -e "  ${BLUE}16)${NC} Scan Configs & Auto-Create Services"
         echo ""
         echo -e " ${BOLD}${WHITE}Info & Logs${NC}"
         echo -e "  ${CYAN}8)${NC} View Last 50 Logs"
@@ -1054,6 +1095,7 @@ main_menu() {
             13) watchdog_status ;;
             14) remove_watchdog ;;
             15) download_binary ;;
+            16) scan_and_sync_configs ;;
             0)
                 echo -e "\n ${GREEN}Goodbye!${NC}\n"
                 exit 0

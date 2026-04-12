@@ -39,6 +39,11 @@ type IpxConfig struct {
 	SpoofSrcIP string `toml:"spoof_src_ip"`
 	SpoofDstIP string `toml:"spoof_dst_ip"`
 	Interface  string `toml:"interface"`
+
+	// Split-path fields (optional)
+	DownloadDstIP  string `toml:"download_dst_ip"`  // Kharej: send download to this IP instead of dst_ip
+	RelayTarget    string `toml:"relay_target"`     // Relay mode: forward packets to this addr (ip:port)
+	RelayListenPort int   `toml:"relay_listen_port"` // Iran: listen for relay download on this port
 }
 
 type SecurityConfig struct {
@@ -69,11 +74,18 @@ func ParseConfig(path string) (*Config, error) {
 	}
 
 	// Validate required fields
-	if config.Ipx.ListenIP == "" || config.Ipx.DstIP == "" || config.Ipx.SpoofSrcIP == "" || config.Ipx.SpoofDstIP == "" {
-		return nil, fmt.Errorf("ipx: listen_ip, dst_ip, spoof_src_ip, spoof_dst_ip are all required")
-	}
-	if config.Ipx.Mode != "server" && config.Ipx.Mode != "client" {
-		return nil, fmt.Errorf("ipx.mode must be 'server' or 'client'")
+	if config.Ipx.Mode == "relay" {
+		// Relay mode: minimal requirements
+		if config.Ipx.ListenIP == "" || config.Ipx.SpoofDstIP == "" || config.Ipx.RelayTarget == "" {
+			return nil, fmt.Errorf("relay mode: listen_ip, spoof_dst_ip, relay_target are required")
+		}
+	} else {
+		if config.Ipx.ListenIP == "" || config.Ipx.DstIP == "" || config.Ipx.SpoofSrcIP == "" || config.Ipx.SpoofDstIP == "" {
+			return nil, fmt.Errorf("ipx: listen_ip, dst_ip, spoof_src_ip, spoof_dst_ip are all required")
+		}
+		if config.Ipx.Mode != "server" && config.Ipx.Mode != "client" {
+			return nil, fmt.Errorf("ipx.mode must be 'server', 'client', or 'relay'")
+		}
 	}
 	if config.Tun.HealthPort == 0 {
 		config.Tun.HealthPort = 4096

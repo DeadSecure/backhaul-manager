@@ -249,6 +249,8 @@ dst_ip = "${DST_IP}"
 spoof_src_ip = "${SPOOF_SRC_IP}"
 spoof_dst_ip = "${SPOOF_DST_IP}"
 interface = "${INTERFACE}"
+$([ -n "${DOWNLOAD_DST_IP}" ] && echo "download_dst_ip = \"${DOWNLOAD_DST_IP}\"")
+$([ -n "${RELAY_LISTEN_PORT}" ] && [ "${RELAY_LISTEN_PORT}" != "0" ] && echo "relay_listen_port = ${RELAY_LISTEN_PORT}")
 
 [security]
 enable_encryption = false
@@ -261,6 +263,49 @@ channel_size = ${CHANNEL_SIZE}
 so_sndbuf = 0
 batch_size = 2048
 packet_multiply = ${PACKET_MULTIPLY}
+
+[logging]
+log_level = "info"
+EOF
+}
+
+generate_relay_config() {
+    local config_file="$1"
+
+    cat > "${config_file}" << EOF
+[transport]
+type = "tun"
+heartbeat_interval = 10
+heartbeat_timeout = 25
+
+[tun]
+encapsulation = "ipx"
+name = "relay"
+local_addr = "0.0.0.0/32"
+remote_addr = "0.0.0.0/32"
+health_port = ${TUNNEL_PORT}
+mtu = ${MTU:-1320}
+
+[ipx]
+mode = "relay"
+profile = "udp"
+listen_ip = "${LISTEN_IP}"
+dst_ip = ""
+spoof_src_ip = ""
+spoof_dst_ip = "${SPOOF_DST_IP}"
+interface = ""
+relay_target = "${RELAY_TARGET}"
+
+[security]
+enable_encryption = false
+
+[tuning]
+auto_tuning = false
+workers = 0
+channel_size = 0
+so_sndbuf = 0
+batch_size = 0
+packet_multiply = 1
 
 [logging]
 log_level = "info"
@@ -361,6 +406,8 @@ setup_iran() {
     read_input "Workers (0=auto)" "0" WORKERS
     read_input "Channel size" "10000" CHANNEL_SIZE
     read_input "Anti-loss mode (1=off, 2=duplicate, 3=XOR-FEC, 4=RS-FEC)" "1" PACKET_MULTIPLY
+    read_input "Split-path relay port (0=off, e.g. 4097)" "0" RELAY_LISTEN_PORT
+    DOWNLOAD_DST_IP=""
 
     # ── Step 4: Review ──
     show_review_box "iran"
@@ -470,6 +517,11 @@ setup_kharej() {
     read_input "Workers (0=auto)" "0" WORKERS
     read_input "Channel size" "10000" CHANNEL_SIZE
     read_input "Anti-loss mode (1=off, 2=duplicate, 3=XOR-FEC, 4=RS-FEC)" "1" PACKET_MULTIPLY
+    read_input "Split-path download IP (0=off, Iran relay server B IP)" "0" DOWNLOAD_DST_IP
+    if [ "${DOWNLOAD_DST_IP}" = "0" ]; then
+        DOWNLOAD_DST_IP=""
+    fi
+    RELAY_LISTEN_PORT="0"
 
     # ── Step 4: Review ──
     show_review_box "kharej"
@@ -776,6 +828,93 @@ switch_engine() {
     systemctl status "${SELECTED_TUNNEL}" --no-pager -l 2>/dev/null | head -5
 }
 
+# ─── Setup Relay (Server B for Split-Path) ────────────────────────
+
+setup_relay() {
+    print_header
+    echo -e " ${GREEN}${BOLD}>>> Setup Relay Server (Split-Path — Server B)${NC}"
+    echo ""
+    echo -e " ${YELLOW}This server receives download traffic from Kharej via spoof${NC}"
+    echo -e " ${YELLOW}and forwards it to Server A via regular UDP.${NC}"
+    echo ""
+    print_line
+
+    INTERFACE=$(detect_interface)
+    local AUTO_IP
+    AUTO_IP=$(detect_public_ip)
+
+    echo -e "\n ${MAGENTA}${BOLD}[1/3] Relay Identity${NC}"
+    read_input "Tunnel port (must match Iran/Kharej)" "2222" TUNNEL_PORT
+    read_input "MTU" "1320" MTU
+
+    echo -e "\n ${MAGENTA}${BOLD}[2/3] Network${NC}"
+    read_input "Listen IP (this server's IP)" "${AUTO_IP}" LISTEN_IP
+    if [ -z "$LISTEN_IP" ]; then
+        msg_err "Listen IP is required!"
+        return
+    fi
+    read_input "Spoof Dst IP (Kharej's spoof source IP)" "" SPOOF_DST_IP
+    if [ -z "$SPOOF_DST_IP" ]; then
+        msg_err "Spoof Dst IP is required!"
+        return
+    fi
+
+    echo -e "\n ${MAGENTA}${BOLD}[3/3] Relay Target${NC}"
+    read_input "Server A IP (Iran main server)" "" RELAY_TARGET_IP
+    if [ -z "$RELAY_TARGET_IP" ]; then
+        msg_err "Server A IP is required!"
+        return
+    fi
+    read_input "Server A relay port" "4097" RELAY_TARGET_PORT
+    RELAY_TARGET="${RELAY_TARGET_IP}:${RELAY_TARGET_PORT}"
+
+    echo ""
+    print_double_line
+    echo -e "  ${CYAN}Relay Config Review:${NC}"
+    echo -e "    Listen:       ${GREEN}${BOLD}${LISTEN_IP}:${TUNNEL_PORT}${NC}"
+    echo -e "    Accept from:  ${MAGENTA}${BOLD}${SPOOF_DST_IP}${NC} (Kharej spoof src)"
+    echo -e "    Forward to:   ${BLUE}${BOLD}${RELAY_TARGET}${NC} (Server A)"
+    print_double_line
+    echo ""
+
+    read -p "  Proceed with setup? (Y/n): " confirm
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+        msg_warn "Setup cancelled."
+        return
+    fi
+
+    echo ""
+    mkdir -p "${CORE_DIR}"
+
+    local config_file="${CORE_DIR}/relay${TUNNEL_PORT}.toml"
+    local service_name="spoof-relay${TUNNEL_PORT}"
+
+    generate_relay_config "${config_file}"
+    msg_ok "Config saved: ${config_file}"
+
+    if ! check_binary; then
+        msg_warn "Binary not found. Download it first (option 12)."
+        msg_ok "Config saved but service NOT started."
+        return
+    fi
+
+    create_systemd_service "${service_name}" "${config_file}" "Spoof Tunnel Relay - port ${TUNNEL_PORT}"
+    msg_ok "Service created and started: ${service_name}"
+
+    echo ""
+    print_double_line
+    echo -e " ${GREEN}${BOLD}  Relay Server Setup Complete!${NC}"
+    print_double_line
+    echo ""
+    echo -e "  Config:    ${BLUE}${config_file}${NC}"
+    echo -e "  Service:   ${BLUE}${service_name}.service${NC}"
+    echo ""
+
+    echo -e " ${CYAN}Service status:${NC}"
+    systemctl status "${service_name}" --no-pager -l 2>/dev/null | head -5
+    echo ""
+}
+
 # ─── Main Menu ────────────────────────────────────────────────────
 
 main_menu() {
@@ -784,6 +923,7 @@ main_menu() {
         echo -e " ${BOLD}${WHITE}Setup${NC}"
         echo -e "  ${GREEN}1)${NC} Setup Iran Server"
         echo -e "  ${BLUE}2)${NC} Setup Kharej Client"
+        echo -e "  ${MAGENTA}15)${NC} Setup Relay (Split-Path)"
         echo ""
         echo -e " ${BOLD}${WHITE}Tunnels${NC}"
         echo -e "  ${CYAN}3)${NC} List All Tunnels"
@@ -824,6 +964,7 @@ main_menu() {
             12) download_binary ;;
             13) do_delete ;;
             14) switch_engine ;;
+            15) setup_relay ;;
             0)
                 echo -e "\n ${GREEN}Goodbye!${NC}\n"
                 exit 0

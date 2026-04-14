@@ -5,7 +5,7 @@
 # ║  Iran (Server) & Kharej (Client) - Peer-to-Peer IPX Tunnel   ║
 # ╚════════════════════════════════════════════════════════════════╝
 
-VERSION="2.1.0"
+VERSION="2.2.0"
 
 # ─── Colors ───────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -130,6 +130,97 @@ download_binary() {
     else
         msg_err "Download failed."
     fi
+}
+
+# ─── Update Core (Download + Restart) ──────────────────────────
+
+update_core() {
+    echo ""
+    echo -e " ${GREEN}${BOLD}>>> Update Spoof Tunnel Core${NC}"
+    print_line
+    echo ""
+
+    # Show current binary info
+    if [ -f "${BINARY_SPOOF}" ]; then
+        local fsize=$(stat -c%s "${BINARY_SPOOF}" 2>/dev/null || stat -f%z "${BINARY_SPOOF}" 2>/dev/null)
+        local fdate=$(stat -c%y "${BINARY_SPOOF}" 2>/dev/null | cut -d. -f1)
+        echo -e "  Current binary: ${BLUE}${BINARY_SPOOF}${NC}"
+        echo -e "  Size:           ${CYAN}$(( ${fsize:-0} / 1024 / 1024 )) MB${NC}"
+        echo -e "  Modified:       ${CYAN}${fdate:-unknown}${NC}"
+    else
+        msg_warn "No binary found — fresh install."
+    fi
+    echo ""
+
+    echo -e "  ${WHITE}1)${NC} Update from ${CYAN}Iran Mirror${NC}       ${DIM}(79.175.188.86 — fast for Iran)${NC}"
+    echo -e "  ${WHITE}2)${NC} Update from ${BLUE}GitHub${NC}            ${DIM}(github.com/alireza-2030 — international)${NC}"
+    echo -e "  ${DIM}0)${NC} Cancel"
+    echo ""
+    read -p "  Select mirror: " mirror_choice
+
+    local url=""
+    case $mirror_choice in
+        1) url="${MIRROR_URL}/spoof-tunnel-core" ;;
+        2) url="${GITHUB_URL}/spoof-tunnel-core" ;;
+        0) return ;;
+        *) msg_err "Invalid option."; return ;;
+    esac
+
+    mkdir -p "${CORE_DIR}"
+
+    # Stop all spoof services before replacing binary
+    local services=()
+    for svc in $(systemctl list-units --type=service --all --no-legend 2>/dev/null | grep "spoof-" | awk '{print $1}'); do
+        local name="${svc%.service}"
+        if systemctl is-active "${name}" &>/dev/null; then
+            services+=("${name}")
+            msg_info "Stopping ${name}..."
+            systemctl stop "${name}" 2>/dev/null
+        fi
+    done
+
+    # Remove old binary
+    if [ -f "${BINARY_SPOOF}" ]; then
+        rm -f "${BINARY_SPOOF}"
+        msg_info "Old binary removed."
+    fi
+
+    # Download new binary
+    msg_info "Downloading: ${url}"
+    echo ""
+    if curl -L --max-time 120 --progress-bar -o "${BINARY_SPOOF}" "${url}"; then
+        local fsize=$(stat -c%s "${BINARY_SPOOF}" 2>/dev/null || stat -f%z "${BINARY_SPOOF}" 2>/dev/null)
+        if [ "${fsize:-0}" -gt 500000 ]; then
+            chmod +x "${BINARY_SPOOF}"
+            msg_ok "New binary installed: ${BINARY_SPOOF} ($(( fsize / 1024 / 1024 )) MB)"
+        else
+            msg_err "Downloaded file is too small — update failed!"
+            rm -f "${BINARY_SPOOF}" 2>/dev/null
+            return
+        fi
+    else
+        msg_err "Download failed!"
+        return
+    fi
+
+    # Restart all previously running services
+    if [ ${#services[@]} -gt 0 ]; then
+        echo ""
+        msg_info "Restarting services..."
+        systemctl daemon-reload
+        for svc in "${services[@]}"; do
+            systemctl start "${svc}" 2>/dev/null
+            local status=$(systemctl is-active "${svc}" 2>/dev/null)
+            if [ "${status}" = "active" ]; then
+                msg_ok "  ${svc} -> running"
+            else
+                msg_err "  ${svc} -> FAILED"
+            fi
+        done
+    fi
+
+    echo ""
+    msg_ok "Update complete!"
 }
 
 # ─── Auto-Detect ──────────────────────────────────────────────────
@@ -941,6 +1032,7 @@ main_menu() {
         echo -e " ${BOLD}${WHITE}Install & Tools${NC}"
         echo -e "  ${MAGENTA}12)${NC} Download Binary"
         echo -e "  ${YELLOW}14)${NC} Switch Engine (Spoof/Backhaul)"
+        echo -e "  ${GREEN}16)${NC} Update Core (Download + Restart)"
         echo ""
         echo -e " ${BOLD}${WHITE}Danger${NC}"
         echo -e "  ${RED}13)${NC} Delete a Tunnel"
@@ -965,6 +1057,7 @@ main_menu() {
             13) do_delete ;;
             14) switch_engine ;;
             15) setup_relay ;;
+            16) update_core ;;
             0)
                 echo -e "\n ${GREEN}Goodbye!${NC}\n"
                 exit 0

@@ -3,7 +3,9 @@ package main
 import (
 	"log"
 	"net"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/songgao/water"
 )
@@ -217,7 +219,8 @@ func StartRelayListener(ifce *water.Interface, port int, mtu int) {
 			// Ignore heartbeats from relay path
 
 		case PktTypePong:
-			// Ignore pongs from relay path
+			// Pong received via relay path — update heartbeat
+			atomic.StoreInt64(&lastPongTime, time.Now().Unix())
 		}
 	}
 }

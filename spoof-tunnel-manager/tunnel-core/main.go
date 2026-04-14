@@ -136,9 +136,17 @@ func main() {
 	}
 	log.Printf("══════════════════════════════════════════════════")
 
+	// ── 7. Start Forwarder (per-worker raw sockets, blocking) ──
+	// In split-path Kharej mode, download goes to a different IP
+	forwardDstIP := cfg.Ipx.DstIP
+	if cfg.Ipx.DownloadDstIP != "" {
+		forwardDstIP = cfg.Ipx.DownloadDstIP
+	}
+
 	// ── 5. Start Receiver (own raw socket for pong) ──
+	// Pong destination = forwardDstIP so it goes through relay in split-path mode
 	go StartReceiver(tunIfce, cfg.Ipx.ListenIP, tunnelPort, cfg.Tun.Mtu,
-		cfg.Ipx.SpoofDstIP, cfg.Ipx.SpoofSrcIP, cfg.Ipx.DstIP, tunnelPort, sndbuf)
+		cfg.Ipx.SpoofDstIP, cfg.Ipx.SpoofSrcIP, forwardDstIP, tunnelPort, sndbuf)
 
 	// ── 5b. Start Relay Download Listener (if split-path Server A) ──
 	if cfg.Ipx.RelayListenPort > 0 {
@@ -148,11 +156,5 @@ func main() {
 	// ── 6. Start Heartbeat (own raw socket) ──
 	go StartHeartbeat(cfg.Ipx.DstIP, tunnelPort, cfg.Ipx.SpoofSrcIP, tunnelPort, hbInterval, hbTimeout, sndbuf)
 
-	// ── 7. Start Forwarder (per-worker raw sockets, blocking) ──
-	// In split-path Kharej mode, download goes to a different IP
-	forwardDstIP := cfg.Ipx.DstIP
-	if cfg.Ipx.DownloadDstIP != "" {
-		forwardDstIP = cfg.Ipx.DownloadDstIP
-	}
 	StartForwarder(tunIfce, forwardDstIP, tunnelPort, cfg.Ipx.SpoofSrcIP, tunnelPort, workers, cfg.Tun.Mtu, cfg.Tuning.ChannelSize, sndbuf, multiply)
 }

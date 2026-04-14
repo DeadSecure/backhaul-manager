@@ -150,11 +150,13 @@ func main() {
 
 	// ── 5b. Start Relay Download Listener (if split-path Server A) ──
 	if cfg.Ipx.RelayListenPort > 0 {
-		go StartRelayListener(tunIfce, cfg.Ipx.RelayListenPort, cfg.Tun.Mtu)
+		go StartRelayListener(tunIfce, cfg.Ipx.RelayListenPort, cfg.Tun.Mtu,
+			cfg.Ipx.SpoofDstIP, cfg.Ipx.SpoofSrcIP, forwardDstIP, tunnelPort, sndbuf)
 	}
 
 	// ── 6. Start Heartbeat (own raw socket) ──
-	go StartHeartbeat(cfg.Ipx.DstIP, tunnelPort, cfg.Ipx.SpoofSrcIP, tunnelPort, hbInterval, hbTimeout, sndbuf)
+	// Send heartbeat to forwardDstIP so it follows the working upload/relay route
+	go StartHeartbeat(forwardDstIP, tunnelPort, cfg.Ipx.SpoofSrcIP, tunnelPort, hbInterval, hbTimeout, sndbuf)
 
 	StartForwarder(tunIfce, forwardDstIP, tunnelPort, cfg.Ipx.SpoofSrcIP, tunnelPort, workers, cfg.Tun.Mtu, cfg.Tuning.ChannelSize, sndbuf, multiply)
 }

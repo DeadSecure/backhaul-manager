@@ -100,7 +100,7 @@ func StartRelay(listenIP string, listenPort int, expectedSrcIP string, relayTarg
 // StartRelayListener runs on Server A in split-path mode.
 // Listens for regular UDP packets from Server B (relay) and writes to TUN.
 // These are download packets that Kharej sent via spoof to Server B.
-func StartRelayListener(ifce *water.Interface, port int, mtu int) {
+func StartRelayListener(ifce *water.Interface, port int, mtu int, expectedSrcIP string, spoofSrcIP string, dstIPStr string, dstPort int, sndbuf int) {
 	addr := &net.UDPAddr{IP: net.IPv4zero, Port: port}
 	conn, err := net.ListenUDP("udp4", addr)
 	if err != nil {
@@ -112,6 +112,20 @@ func StartRelayListener(ifce *water.Interface, port int, mtu int) {
 	_ = conn.SetReadBuffer(8 * 1024 * 1024)
 
 	log.Printf("RelayListener: accepting download relay on :%d", port)
+
+	// Pong context gets its own raw socket — independent from forwarder
+	pongFD, err := CreateRawSocket(sndbuf)
+	if err != nil {
+		log.Fatalf("RelayListener: pong raw socket failed: %v", err)
+	}
+
+	pongSrcIP := net.ParseIP(spoofSrcIP).To4()
+	pongDstIP := net.ParseIP(dstIPStr).To4()
+	var pongDstMap [4]byte
+	copy(pongDstMap[:], pongDstIP)
+	pongAddr := &syscall.SockaddrInet4{Port: dstPort, Addr: pongDstMap}
+	pongCtx := NewSpoofContext(pongSrcIP, pongDstIP, port, dstPort, 64, pongAddr, pongFD)
+	pongPayload := []byte{PktTypePong}
 
 	// FEC decoder — for mode 3 (XOR)
 	fecDec := NewFECDecoder(4)
@@ -216,7 +230,8 @@ func StartRelayListener(ifce *water.Interface, port int, mtu int) {
 			}
 
 		case PktTypeHeartbeat:
-			// Ignore heartbeats from relay path
+			// Heartbeat received via relay path — send pong back directly to Kharej
+			_ = pongCtx.buildAndSend(pongPayload)
 
 		case PktTypePong:
 			// Pong received via relay path — update heartbeat
